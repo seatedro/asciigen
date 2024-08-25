@@ -216,6 +216,7 @@ fn loadImage(path: []const u8) !Image {
 fn convertToAscii(
     img: []u8,
     w: usize,
+    h: usize,
     x: usize,
     y: usize,
     ascii_char: u8,
@@ -226,14 +227,16 @@ fn convertToAscii(
     }
 
     const bitmap = &font_bitmap[ascii_char];
+    const block_w = @min(CHAR_SIZE, w - x);
+    const block_h = @min(CHAR_SIZE, img.len / (w * 3) - y);
     var dy: usize = 0;
-    while (dy < CHAR_SIZE) : (dy += 1) {
+    while (dy < block_h) : (dy += 1) {
         var dx: usize = 0;
-        while (dx < CHAR_SIZE) : (dx += 1) {
+        while (dx < block_w) : (dx += 1) {
             const img_x = x + dx;
             const img_y = y + dy;
 
-            if (img_x < w and img_y < w) {
+            if (img_x < w and img_y < h) {
                 const idx = (img_y * w + img_x) * 3;
                 const shift: u3 = @intCast(7 - dx);
                 const bit: u8 = @as(u8, 1) << shift;
@@ -252,21 +255,42 @@ fn convertToAscii(
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.GeneralPurposeAllocator(.{ .safety = false }){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     const args = try parseArgs(allocator);
 
-    const img = loadImage(args.input) catch |err| {
+    const original_img = loadImage(args.input) catch |err| {
         std.debug.print("Error loading image: {}\n", .{err});
         return err;
     };
-    defer stb.stbi_image_free(img.data);
+    defer stb.stbi_image_free(original_img.data);
+
+    const down_scale = 2;
+    const img_w = original_img.width / down_scale;
+    const img_h = original_img.height / down_scale;
+
+    const downscaled_img = try allocator.alloc(u8, img_w * img_h * 3);
+    defer allocator.free(downscaled_img);
+
+    _ = stb.stbir_resize_uint8_linear(original_img.data, @intCast(original_img.width), @intCast(original_img.height), 0, downscaled_img.ptr, @intCast(img_w), @intCast(img_h), 0, @intCast(original_img.channels));
+    // if (downscaled_img == null) {
+    //     std.debug.print("Error downscaling image\n", .{});
+    //     return error.ImageDownscaleFailed;
+    // }
+    defer stb.stbi_image_free(downscaled_img.ptr);
+
+    const img = Image{
+        .data = downscaled_img.ptr,
+        .width = img_w,
+        .height = img_h,
+        .channels = original_img.channels,
+    };
 
     // Output image dimensions (multiples of 8 for ASCII blocks)
-    const out_w = (img.width / CHAR_SIZE) * CHAR_SIZE;
-    const out_h = (img.height / CHAR_SIZE) * CHAR_SIZE;
+    const out_w = (img_w / CHAR_SIZE) * CHAR_SIZE;
+    const out_h = (img_h / CHAR_SIZE) * CHAR_SIZE;
 
     // Create output buffer for the ASCII art image
     const ascii_img = try allocator.alloc(u8, out_w * out_h * 3);
@@ -282,9 +306,12 @@ pub fn main() !void {
             var sum_brightness: u64 = 0;
             var pixel_count: u64 = 0;
 
-            // Calculate average brightness in the 8x8 block
-            for (0..CHAR_SIZE) |dy| {
-                for (0..CHAR_SIZE) |dx| {
+            // Calculate average brightness in the block
+            // (upto 8x8, or less for edge blocks)
+            const block_w = @min(CHAR_SIZE, out_w - x);
+            const block_h = @min(CHAR_SIZE, out_h - y);
+            for (0..block_h) |dy| {
+                for (0..block_w) |dx| {
                     const ix = x + dx;
                     const iy = y + dy;
                     // Add boundary check
@@ -300,7 +327,8 @@ pub fn main() !void {
                     const g = img.data[pixel_index + 1];
                     const b = img.data[pixel_index + 2];
                     // Add necessary casts for u8 to comptime_float conversion
-                    const gray: u64 = @intFromFloat(@as(f32, @floatFromInt(r)) * 0.3 + @as(f32, @floatFromInt(g)) * 0.59 + @as(f32, @floatFromInt(b)) * 0.11);
+                    const gray: u64 = (r * 30 + g * 59 + b * 11) / 100;
+                    // const gray: u64 = @intFromFloat(@as(f32, @floatFromInt(r)) * 0.3 + @as(f32, @floatFromInt(g)) * 0.59 + @as(f32, @floatFromInt(b)) * 0.11);
                     sum_brightness += gray;
                     pixel_count += 1;
                 }
@@ -316,7 +344,7 @@ pub fn main() !void {
             }
 
             // Draw ASCII character as a grayscale block in the output image
-            convertToAscii(ascii_img, out_w, x, y, ascii_char);
+            convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char);
         }
     }
 

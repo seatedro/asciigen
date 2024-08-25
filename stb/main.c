@@ -9,6 +9,8 @@
 #include <string.h>
 #include <time.h>
 
+#define DOWNSAMPLE_FACTOR 4
+
 /*
  * Author: Daniel Hepper <daniel@hepper.net>
  * URL: https://github.com/dhepper/font8x8
@@ -149,8 +151,8 @@ const char *ascii_chars = "@%#*+=-:. ";
 int num_chars = 10; // There are 9 characters in the ascii_chars string
 
 // Function to draw an ASCII character to the image buffer
-void draw_ascii_char(unsigned char *img, int img_width, int x, int y,
-                     char ascii_char, int char_size) {
+void draw_ascii_char(unsigned char *img, int img_width, int img_height, int x,
+                     int y, char ascii_char, int char_size) {
   if (ascii_char < 32 || ascii_char > 126)
     return; // Skip unsupported characters
 
@@ -161,7 +163,7 @@ void draw_ascii_char(unsigned char *img, int img_width, int x, int y,
       int img_x = x + dx;
       int img_y = y + dy;
 
-      if (img_x < img_width && img_y < img_width) {
+      if (img_x < img_width && img_y < img_height) {
         int pixel_index = (img_y * img_width + img_x) * 3;
         if (bitmap[dy] &
             (1 << (7 - dx))) { // Check if the bit at (dx, dy) is set
@@ -178,57 +180,80 @@ void draw_ascii_char(unsigned char *img, int img_width, int x, int y,
   }
 }
 
+// Function to downsample the image
+unsigned char *downsample_image(unsigned char *img, int *width, int *height,
+                                int channels) {
+  int new_width = *width / DOWNSAMPLE_FACTOR;
+  int new_height = *height / DOWNSAMPLE_FACTOR;
+  unsigned char *new_img = malloc(new_width * new_height * channels);
+
+  if (!new_img) {
+    fprintf(stderr, "Failed to allocate memory for downsampled image.\n");
+    return NULL;
+  }
+
+  if (!stbir_resize_uint8_linear(img, *width, *height, 0, new_img, new_width,
+                                 new_height, 0, channels)) {
+    fprintf(stderr, "Failed to resize image.\n");
+    free(new_img);
+    return NULL;
+  }
+
+  *width = new_width;
+  *height = new_height;
+  return new_img;
+}
+
 // Function to get current time in milliseconds
 long long current_time_ms() {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (long long)(ts.tv_sec) * 1000 + (long long)(ts.tv_nsec) / 1000000;
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (long long)(ts.tv_sec) * 1000 + (long long)(ts.tv_nsec) / 1000000;
 }
 
 // Test function for loading image
-void test_load_time(const char* filename) {
-    long long start_time = current_time_ms();
-    int width, height, channels;
-    unsigned char *img = stbi_load(filename, &width, &height, &channels, 0);
-    long long time_after_load = current_time_ms();
-    
-    if (img) {
-        printf("Load time: %lld ms\n", time_after_load - start_time);
-        stbi_image_free(img);
-    } else {
-        printf("Error loading image: %s\n", filename);
-    }
+void test_load_time(const char *filename) {
+  long long start_time = current_time_ms();
+  int width, height, channels;
+  unsigned char *img = stbi_load(filename, &width, &height, &channels, 0);
+  long long time_after_load = current_time_ms();
+
+  if (img) {
+    printf("Load time: %lld ms\n", time_after_load - start_time);
+    stbi_image_free(img);
+  } else {
+    printf("Error loading image: %s\n", filename);
+  }
 }
 
 // Test function for loading and writing image
-void test_load_and_write_time(const char* input_filename, const char* output_filename) {
-    long long start_time = current_time_ms();
-    int width, height, channels;
-    unsigned char *img = stbi_load(input_filename, &width, &height, &channels, 0);
-    long long time_after_load = current_time_ms();
-    
-    if (img) {
-        int result = stbi_write_png(output_filename, width, height, channels, img, width * channels);
-        long long time_after_write = current_time_ms();
-        
-        if (result) {
-            printf("Load time: %lld ms\n", time_after_load - start_time);
-            printf("Write time: %lld ms\n", time_after_write - time_after_load);
-            printf("Total time: %lld ms\n", time_after_write - start_time);
-        } else {
-            printf("Error writing image: %s\n", output_filename);
-        }
-        
-        stbi_image_free(img);
+void test_load_and_write_time(const char *input_filename,
+                              const char *output_filename) {
+  long long start_time = current_time_ms();
+  int width, height, channels;
+  unsigned char *img = stbi_load(input_filename, &width, &height, &channels, 0);
+  long long time_after_load = current_time_ms();
+
+  if (img) {
+    int result = stbi_write_png(output_filename, width, height, channels, img,
+                                width * channels);
+    long long time_after_write = current_time_ms();
+
+    if (result) {
+      printf("Load time: %lld ms\n", time_after_load - start_time);
+      printf("Write time: %lld ms\n", time_after_write - time_after_load);
+      printf("Total time: %lld ms\n", time_after_write - start_time);
     } else {
-        printf("Error loading image: %s\n", input_filename);
+      printf("Error writing image: %s\n", output_filename);
     }
+
+    stbi_image_free(img);
+  } else {
+    printf("Error loading image: %s\n", input_filename);
+  }
 }
 
-
-
 int main(int argc, char *argv[]) {
-  printf("Hello, world!\n");
   if (argc != 2) {
     fprintf(stderr, "Usage: %s <input_image> <output_image>\n", argv[0]);
     return 1;
@@ -246,6 +271,16 @@ int main(int argc, char *argv[]) {
     printf("Failed to load image.\n");
     return 1;
   }
+
+  // Downsample the image
+  unsigned char *downsampled_img =
+      downsample_image(img, &width, &height, channels);
+  if (!downsampled_img) {
+    stbi_image_free(img);
+    return 1;
+  }
+  stbi_image_free(img);
+  img = downsampled_img;
 
   // Output image dimensions (multiples of 8 for ASCII blocks)
   int char_size = 8; // Each ASCII character block size
@@ -293,7 +328,8 @@ int main(int argc, char *argv[]) {
       }
 
       // Draw ASCII character as a grayscale block in the output image
-      draw_ascii_char(ascii_img, out_width, x, y, ascii_char, char_size);
+      draw_ascii_char(ascii_img, out_width, out_height, x, y, ascii_char,
+                      char_size);
     }
   }
 
