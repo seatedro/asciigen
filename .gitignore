@@ -16,6 +16,11 @@ zig-out/
 /build/
 /build-*/
 /docgen_tmp/
+images/
+**/*.DS_Store
+**/*.png
+**/*.jpg
+**/*.jpeg
 
 # Although this was renamed to .zig-cache, let's leave it here for a few
 # releases to make it less annoying to work with multiple branches.
