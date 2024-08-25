@@ -204,7 +204,6 @@ fn loadImage(path: []const u8) !Image {
         std.debug.print("Error loading image: {s}\n", .{path});
         return error.ImageLoadFailed;
     }
-    std.debug.print("Loaded image: {s}, {}x{}\n", .{ path, w, h });
 
     return Image{
         .data = data,
@@ -238,7 +237,7 @@ fn convertToAscii(
                 const idx = (img_y * w + img_x) * 3;
                 const shift: u3 = @intCast(7 - dx);
                 const bit: u8 = @as(u8, 1) << shift;
-                if ((bitmap[dy] & bit) != 0) {
+                if ((bitmap[dy] & bit) == 0) {
                     img[idx] = 255;
                     img[idx + 1] = 255;
                     img[idx + 2] = 255;
@@ -257,7 +256,6 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const start_time = std.time.milliTimestamp();
     const args = try parseArgs(allocator);
 
     const img = loadImage(args.input) catch |err| {
@@ -274,13 +272,13 @@ pub fn main() !void {
     const ascii_img = try allocator.alloc(u8, out_w * out_h * 3);
     defer allocator.free(ascii_img);
 
-    @memset(ascii_img, 255);
+    @memset(ascii_img, 0);
 
     // Process each 8x8 block
     var y: usize = 0;
-    while (y < out_h) : (y += 1) {
+    while (y < out_h) : (y += CHAR_SIZE) {
         var x: usize = 0;
-        while (x < out_w) : (x += 1) {
+        while (x < out_w) : (x += CHAR_SIZE) {
             var sum_brightness: u64 = 0;
             var pixel_count: u64 = 0;
 
@@ -322,23 +320,45 @@ pub fn main() !void {
         }
     }
 
-    std.debug.print("Writing output image: {s}\n", .{args.output});
     const save_result = stb.stbi_write_png(
-        args.output.ptr,
+        @ptrCast(args.output.ptr),
         @intCast(out_w),
         @intCast(out_h),
         @intCast(img.channels),
-        ascii_img.ptr,
+        @ptrCast(ascii_img.ptr),
         @intCast(out_w * 3),
     );
     if (save_result == 0) {
         std.debug.print("Error writing output image\n", .{});
         return error.ImageWriteFailed;
     }
+}
 
-    std.debug.print("ASCII art image saved to {s}\n", .{args.output});
+test "test_load_time" {
+    const start_time = std.time.milliTimestamp();
+    const img = loadImage("stb/x.jpeg") catch |err| {
+        std.debug.print("Error loading image: {}\n", .{err});
+        return err;
+    };
+    defer stb.stbi_image_free(img.data);
+    const time_after_load = std.time.milliTimestamp();
+    std.debug.print("Load time: {} ms\n", .{time_after_load - start_time});
+}
 
-    const end_time = std.time.milliTimestamp();
-    const duration = end_time - start_time;
-    std.debug.print("Execution time: {} ms\n", .{duration});
+test "test_load_and_write_time" {
+    const start_time = std.time.milliTimestamp();
+    const img = try loadImage("stb/x.jpeg");
+    defer stb.stbi_image_free(img.data);
+    const time_after_load = std.time.milliTimestamp();
+
+    const result = stb.stbi_write_png("stb/x_ascii.png", @intCast(img.width), @intCast(img.height), @intCast(img.channels), img.data, @intCast(img.width * img.channels));
+    const time_after_write = std.time.milliTimestamp();
+
+    if (result != 0) {
+        std.debug.print("Load time: {} ms\n", .{time_after_load - start_time});
+        std.debug.print("Write time: {} ms\n", .{time_after_write - time_after_load});
+        std.debug.print("Total time: {} ms\n", .{time_after_write - start_time});
+    } else {
+        std.debug.print("Error writing image\n", .{});
+    }
 }

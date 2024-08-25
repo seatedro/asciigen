@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /*
  * Author: Daniel Hepper <daniel@hepper.net>
@@ -177,11 +178,66 @@ void draw_ascii_char(unsigned char *img, int img_width, int x, int y,
   }
 }
 
+// Function to get current time in milliseconds
+long long current_time_ms() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)(ts.tv_sec) * 1000 + (long long)(ts.tv_nsec) / 1000000;
+}
+
+// Test function for loading image
+void test_load_time(const char* filename) {
+    long long start_time = current_time_ms();
+    int width, height, channels;
+    unsigned char *img = stbi_load(filename, &width, &height, &channels, 0);
+    long long time_after_load = current_time_ms();
+    
+    if (img) {
+        printf("Load time: %lld ms\n", time_after_load - start_time);
+        stbi_image_free(img);
+    } else {
+        printf("Error loading image: %s\n", filename);
+    }
+}
+
+// Test function for loading and writing image
+void test_load_and_write_time(const char* input_filename, const char* output_filename) {
+    long long start_time = current_time_ms();
+    int width, height, channels;
+    unsigned char *img = stbi_load(input_filename, &width, &height, &channels, 0);
+    long long time_after_load = current_time_ms();
+    
+    if (img) {
+        int result = stbi_write_png(output_filename, width, height, channels, img, width * channels);
+        long long time_after_write = current_time_ms();
+        
+        if (result) {
+            printf("Load time: %lld ms\n", time_after_load - start_time);
+            printf("Write time: %lld ms\n", time_after_write - time_after_load);
+            printf("Total time: %lld ms\n", time_after_write - start_time);
+        } else {
+            printf("Error writing image: %s\n", output_filename);
+        }
+        
+        stbi_image_free(img);
+    } else {
+        printf("Error loading image: %s\n", input_filename);
+    }
+}
+
+
+
 int main(int argc, char *argv[]) {
   printf("Hello, world!\n");
   if (argc != 2) {
     fprintf(stderr, "Usage: %s <input_image> <output_image>\n", argv[0]);
     return 1;
+  }
+
+  if (strcmp(argv[1], "-test") == 0) {
+    test_load_time("x.jpeg");
+    test_load_and_write_time("x.jpeg", "x.png");
+    return 0;
   }
 
   int width, height, channels;
@@ -195,6 +251,7 @@ int main(int argc, char *argv[]) {
   int char_size = 8; // Each ASCII character block size
   int out_width = (width / char_size) * char_size;
   int out_height = (height / char_size) * char_size;
+  printf("Output image dimensions: %dx%d\n", out_width, out_height);
 
   // Create output buffer for the ASCII art image
   unsigned char *ascii_img = malloc(out_width * out_height * 3);
