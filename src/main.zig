@@ -226,7 +226,7 @@ fn convertToAscii(
         return;
     }
 
-    const bitmap = font_bitmap[ascii_char];
+    const bitmap = &font_bitmap[ascii_char];
     var dy: usize = 0;
     while (dy < CHAR_SIZE) : (dy += 1) {
         var dx: usize = 0;
@@ -239,9 +239,9 @@ fn convertToAscii(
                 const shift: u3 = @intCast(7 - dx);
                 const bit: u8 = @as(u8, 1) << shift;
                 if ((bitmap[dy] & bit) != 0) {
-                    img[idx] = 0;
-                    img[idx + 1] = 0;
-                    img[idx + 2] = 0;
+                    img[idx] = 255;
+                    img[idx + 1] = 255;
+                    img[idx + 2] = 255;
                 } else {
                     img[idx] = 0;
                     img[idx + 1] = 0;
