@@ -148,6 +148,7 @@ const Args = struct {
     input: []const u8,
     output: []const u8,
     color: bool,
+    scale: u8,
 };
 
 const Image = struct {
@@ -163,6 +164,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         \\-i, --input <str>     Input image file
         \\-o, --output <str>    Output image file
         \\-c, --color           Use color ASCII characters
+        \\-s, --scale <u8>     Scale factor (default: 8)
     );
 
     var diag = clap.Diagnostic{};
@@ -195,6 +197,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
             break :blk std.fs.path.join(allocator, &.{ current_dir, output_filename }) catch unreachable;
         },
         .color = res.args.color != 0,
+        .scale = res.args.scale orelse 8,
     };
 }
 
@@ -249,9 +252,9 @@ fn convertToAscii(
                     img[idx + 1] = color[1];
                     img[idx + 2] = color[2];
                 } else {
-                    img[idx] = 0;
-                    img[idx + 1] = 0;
-                    img[idx + 2] = 0;
+                    img[idx] = color[0] / 4;
+                    img[idx + 1] = color[1] / 4;
+                    img[idx + 2] = color[2] / 4;
                 }
             }
         }
@@ -271,50 +274,54 @@ pub fn main() !void {
     };
     defer stb.stbi_image_free(original_img.data);
 
-    const down_scale = 8;
-    const img_w = original_img.width / down_scale;
-    const img_h = original_img.height / down_scale;
+    var img: Image = undefined;
+    if (args.scale != 1) {
+        const img_w = original_img.width / args.scale;
+        const img_h = original_img.height / args.scale;
 
-    const downscaled_img = stb.stbir_resize_uint8_linear(
-        original_img.data,
-        @intCast(original_img.width),
-        @intCast(original_img.height),
-        0,
-        0,
-        @intCast(img_w),
-        @intCast(img_h),
-        0,
-        @intCast(original_img.channels),
-    );
-    if (downscaled_img == null) {
-        std.debug.print("Error downscaling image\n", .{});
-        return error.ImageDownscaleFailed;
+        const downscaled_img = stb.stbir_resize_uint8_linear(
+            original_img.data,
+            @intCast(original_img.width),
+            @intCast(original_img.height),
+            0,
+            0,
+            @intCast(img_w),
+            @intCast(img_h),
+            0,
+            @intCast(original_img.channels),
+        );
+        if (downscaled_img == null) {
+            std.debug.print("Error downscaling image\n", .{});
+            return error.ImageDownscaleFailed;
+        }
+        defer stb.stbi_image_free(downscaled_img);
+
+        const upscaled_img = stb.stbir_resize_uint8_linear(
+            downscaled_img,
+            @intCast(img_w),
+            @intCast(img_h),
+            0,
+            0,
+            @intCast(img_w * args.scale),
+            @intCast(img_h * args.scale),
+            0,
+            @intCast(original_img.channels),
+        );
+        if (upscaled_img == null) {
+            std.debug.print("Error upscaling image\n", .{});
+            return error.ImageUpscaleFailed;
+        }
+        defer stb.stbi_image_free(upscaled_img);
+
+        img = Image{
+            .data = upscaled_img,
+            .width = img_w * args.scale,
+            .height = img_h * args.scale,
+            .channels = original_img.channels,
+        };
+    } else {
+        img = original_img;
     }
-    defer stb.stbi_image_free(downscaled_img);
-
-    const upscaled_img = stb.stbir_resize_uint8_linear(
-        downscaled_img,
-        @intCast(img_w),
-        @intCast(img_h),
-        0,
-        0,
-        @intCast(img_w * down_scale),
-        @intCast(img_h * down_scale),
-        0,
-        @intCast(original_img.channels),
-    );
-    if (upscaled_img == null) {
-        std.debug.print("Error upscaling image\n", .{});
-        return error.ImageUpscaleFailed;
-    }
-    defer stb.stbi_image_free(upscaled_img);
-
-    const img = Image{
-        .data = upscaled_img,
-        .width = img_w * down_scale,
-        .height = img_h * down_scale,
-        .channels = original_img.channels,
-    };
 
     // Output image dimensions (multiples of 8 for ASCII blocks)
     const out_w = (img.width / CHAR_SIZE) * CHAR_SIZE;
