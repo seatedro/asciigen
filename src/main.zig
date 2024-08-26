@@ -240,8 +240,8 @@ fn rgbToGrayScale(allocator: std.mem.Allocator, img: Image) ![]u8 {
 }
 
 fn applySobelFilter(allocator: std.mem.Allocator, img: Image) !SobelFilter {
-    const Gx = [_][3]i32{ [_]i32{ -1, 0, 1 }, [_]i32{ -2, 0, 2 }, [_]i32{ -1, 0, 1 } };
-    const Gy = [_][3]i32{ [_]i32{ -1, -2, -1 }, [_]i32{ 0, 0, 0 }, [_]i32{ 1, 2, 1 } };
+    const Gx = [_][3]i32{ .{ -1, 0, 1 }, .{ -2, 0, 2 }, .{ -1, 0, 1 } };
+    const Gy = [_][3]i32{ .{ -1, -2, -1 }, .{ 0, 0, 0 }, .{ 1, 2, 1 } };
 
     var mag = try allocator.alloc(f32, img.width * img.height);
     var dir = try allocator.alloc(f32, img.width * img.height);
