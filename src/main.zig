@@ -10,6 +10,7 @@ const stb = @cImport({
 // VARS
 const ASCII_CHARS = "@%#*+=-:. ";
 const CHAR_SIZE = 8;
+const THRESHOLD = 50;
 
 /// Author: Daniel Hepper <daniel@hepper.net>
 /// URL: https://github.com/dhepper/font8x8
@@ -158,6 +159,11 @@ const Image = struct {
     channels: usize,
 };
 
+const SobelFilter = struct {
+    magnitude: []f32,
+    direction: []f32,
+};
+
 fn parseArgs(allocator: std.mem.Allocator) !Args {
     const params = comptime clap.parseParamsComptime(
         \\-h, --help            Print this help message and exit
@@ -216,6 +222,66 @@ fn loadImage(path: []const u8) !Image {
         .width = @intCast(w),
         .height = @intCast(h),
         .channels = @intCast(chan),
+    };
+}
+
+fn rgbToGrayScale(allocator: std.mem.Allocator, img: Image) ![]u8 {
+    const grayscale_img = try allocator.alloc(u8, img.width * img.height);
+    for (0..img.height) |y| {
+        for (0..img.width) |x| {
+            const i = (y * img.width + x) * img.channels;
+            const r = img.data[i];
+            const g = img.data[i + 1];
+            const b = img.data[i + 2];
+            grayscale_img[y * img.width + x] = @intFromFloat((0.299 * @as(f32, @floatFromInt(r)) + 0.587 * @as(f32, @floatFromInt(g)) + 0.114 * @as(f32, @floatFromInt(b))));
+        }
+    }
+    return grayscale_img;
+}
+
+fn applySobelFilter(allocator: std.mem.Allocator, img: Image) !SobelFilter {
+    const Gx = [_][3]i32{ [_]i32{ -1, 0, 1 }, [_]i32{ -2, 0, 2 }, [_]i32{ -1, 0, 1 } };
+    const Gy = [_][3]i32{ [_]i32{ -1, -2, -1 }, [_]i32{ 0, 0, 0 }, [_]i32{ 1, 2, 1 } };
+
+    var mag = try allocator.alloc(f32, img.width * img.height);
+    var dir = try allocator.alloc(f32, img.width * img.height);
+
+    for (1..img.height - 1) |y| {
+        for (1..img.width - 1) |x| {
+            var gx: f32 = 0;
+            var gy: f32 = 0;
+
+            for (0..3) |i| {
+                for (0..3) |j| {
+                    const pixel = img.data[(y + i - 1) * img.width + (x + j - 1)];
+                    gx += @as(f32, @floatFromInt(Gx[i][j])) * @as(f32, @floatFromInt(pixel));
+                    gy += @as(f32, @floatFromInt(Gy[i][j])) * @as(f32, @floatFromInt(pixel));
+                }
+            }
+
+            mag[y * img.width + x] = @sqrt(gx * gx + gy * gy);
+            dir[y * img.width + x] = std.math.atan2(gy, gx); // The lord's function
+        }
+    }
+
+    return SobelFilter{
+        .magnitude = mag,
+        .direction = dir,
+    };
+}
+
+fn getEdgeChar(mag: f32, dir: f32) ?u8 {
+    if (mag < THRESHOLD) {
+        return null;
+    }
+
+    const angle = (dir + std.math.pi) * (@as(f32, 180) / std.math.pi);
+    return switch (@as(u8, @intFromFloat(@mod(angle + 22.5, 180) / 45))) {
+        0, 4 => '-',
+        1, 5 => '\\',
+        2, 6 => '|',
+        3, 7 => '/',
+        else => unreachable,
     };
 }
 
@@ -294,34 +360,53 @@ pub fn main() !void {
             std.debug.print("Error downscaling image\n", .{});
             return error.ImageDownscaleFailed;
         }
-        defer stb.stbi_image_free(downscaled_img);
 
-        const upscaled_img = stb.stbir_resize_uint8_linear(
-            downscaled_img,
-            @intCast(img_w),
-            @intCast(img_h),
-            0,
-            0,
-            @intCast(img_w * args.scale),
-            @intCast(img_h * args.scale),
-            0,
-            @intCast(original_img.channels),
-        );
-        if (upscaled_img == null) {
-            std.debug.print("Error upscaling image\n", .{});
-            return error.ImageUpscaleFailed;
-        }
-        defer stb.stbi_image_free(upscaled_img);
+        // const upscaled_img = stb.stbir_resize_uint8_linear(
+        //     downscaled_img,
+        //     @intCast(img_w),
+        //     @intCast(img_h),
+        //     0,
+        //     0,
+        //     @intCast(img_w * args.scale),
+        //     @intCast(img_h * args.scale),
+        //     0,
+        //     @intCast(original_img.channels),
+        // );
+        // if (upscaled_img == null) {
+        //     std.debug.print("Error upscaling image\n", .{});
+        //     return error.ImageUpscaleFailed;
+        // }
+        // defer stb.stbi_image_free(upscaled_img);
+
+        // img = Image{
+        //     .data = upscaled_img,
+        //     .width = img_w * args.scale,
+        //     .height = img_h * args.scale,
+        //     .channels = original_img.channels,
+        // };
 
         img = Image{
-            .data = upscaled_img,
-            .width = img_w * args.scale,
-            .height = img_h * args.scale,
+            .data = downscaled_img,
+            .width = img_w,
+            .height = img_h,
             .channels = original_img.channels,
         };
     } else {
         img = original_img;
     }
+    defer if (args.scale != 1) stb.stbi_image_free(img.data);
+
+    const grayscale_img = try rgbToGrayScale(allocator, img);
+    defer allocator.free(grayscale_img);
+
+    const edge_result = try applySobelFilter(allocator, .{
+        .data = grayscale_img.ptr,
+        .width = img.width,
+        .height = img.height,
+        .channels = 1,
+    });
+    defer allocator.free(edge_result.magnitude);
+    defer allocator.free(edge_result.direction);
 
     // Output image dimensions (multiples of 8 for ASCII blocks)
     const out_w = (img.width / CHAR_SIZE) * CHAR_SIZE;
@@ -342,11 +427,14 @@ pub fn main() !void {
             var sum_brightness: u64 = 0;
             var sum_color: [3]u64 = .{ 0, 0, 0 };
             var pixel_count: u64 = 0;
+            var sum_mag: f32 = 0;
+            var sum_dir: f32 = 0;
 
             // Calculate average brightness in the block
             // (upto 8x8, or less for edge blocks)
             const block_w = @min(CHAR_SIZE, out_w - x);
             const block_h = @min(CHAR_SIZE, out_h - y);
+
             for (0..block_h) |dy| {
                 for (0..block_w) |dx| {
                     const ix = x + dx;
@@ -370,13 +458,19 @@ pub fn main() !void {
                         sum_color[1] += g;
                         sum_color[2] += b;
                     }
+                    const edge_index = iy * img.width + ix;
+                    sum_mag += edge_result.magnitude[edge_index];
+                    sum_dir += edge_result.direction[edge_index];
                     pixel_count += 1;
                 }
             }
 
             // Map brightness to ASCII character
             const avg_brightness: usize = @intCast(sum_brightness / pixel_count);
-            const ascii_char: u8 = if (avg_brightness < 32) ' ' else ASCII_CHARS[(avg_brightness * ASCII_CHARS.len) / 256];
+            const avg_mag: f32 = sum_mag / @as(f32, @floatFromInt(pixel_count));
+            const avg_dir: f32 = sum_dir / @as(f32, @floatFromInt(pixel_count));
+            const edge_char = getEdgeChar(avg_mag, avg_dir);
+            const ascii_char: u8 = if (edge_char) |ec| ec else if (avg_brightness < 32) ' ' else ASCII_CHARS[(avg_brightness * ASCII_CHARS.len) / 256];
 
             // Calculate average color only if args.color is true
             var avg_color: [3]u8 = undefined;
