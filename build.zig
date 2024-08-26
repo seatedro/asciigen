@@ -11,7 +11,7 @@ pub fn build(b: *std.Build) !void {
 
 fn runZig(
     b: *std.Build,
-    dep_stb: *std.Build.Dependency,
+    _: *std.Build.Dependency,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 ) !void {
@@ -34,8 +34,10 @@ fn runZig(
 
     exe.addCSourceFile(.{ .file = b.path("stb/stb.c") });
     exe_check.addCSourceFile(.{ .file = b.path("stb/stb.c") });
-    exe.addIncludePath(dep_stb.path(""));
-    exe_check.addIncludePath(dep_stb.path(""));
+    // exe.addIncludePath(dep_stb.path(""));
+    // exe_check.addIncludePath(dep_stb.path(""));
+    exe.addIncludePath(b.path("stb"));
+    exe_check.addIncludePath(b.path("stb"));
 
     b.installArtifact(exe);
 
@@ -56,6 +58,8 @@ fn runZig(
         .target = target,
         .optimize = optimize,
     });
+    unit_tests.addCSourceFile(.{ .file = b.path("stb/stb.c") });
+    unit_tests.addIncludePath(b.path("stb"));
     const run_unit_tests = b.addRunArtifact(unit_tests);
     test_step.dependOn(&run_unit_tests.step);
 }

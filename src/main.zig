@@ -147,6 +147,7 @@ const font_bitmap: [128][8]u8 = .{
 const Args = struct {
     input: []const u8,
     output: []const u8,
+    color: bool,
 };
 
 const Image = struct {
@@ -159,8 +160,9 @@ const Image = struct {
 fn parseArgs(allocator: std.mem.Allocator) !Args {
     const params = comptime clap.parseParamsComptime(
         \\-h, --help            Print this help message and exit
-        \\-i, --input <str>  Input image file
-        \\-o, --output <str>  Output image file
+        \\-i, --input <str>     Input image file
+        \\-o, --output <str>    Output image file
+        \\-c, --color           Use color ASCII characters
     );
 
     var diag = clap.Diagnostic{};
@@ -192,6 +194,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
             const output_filename = std.fmt.allocPrint(std.heap.page_allocator, "{s}_ascii.jpg", .{input_path}) catch unreachable;
             break :blk std.fs.path.join(allocator, &.{ current_dir, output_filename }) catch unreachable;
         },
+        .color = res.args.color != 0,
     };
 }
 
@@ -220,6 +223,7 @@ fn convertToAscii(
     x: usize,
     y: usize,
     ascii_char: u8,
+    color: [3]u8,
 ) void {
     if (ascii_char < 32 or ascii_char > 126) {
         std.debug.print("Error: invalid ASCII character\n", .{});
@@ -240,10 +244,10 @@ fn convertToAscii(
                 const idx = (img_y * w + img_x) * 3;
                 const shift: u3 = @intCast(7 - dx);
                 const bit: u8 = @as(u8, 1) << shift;
-                if ((bitmap[dy] & bit) == 0) {
-                    img[idx] = 255;
-                    img[idx + 1] = 255;
-                    img[idx + 2] = 255;
+                if ((bitmap[dy] & bit) != 0) {
+                    img[idx] = color[0];
+                    img[idx + 1] = color[1];
+                    img[idx + 2] = color[2];
                 } else {
                     img[idx] = 0;
                     img[idx + 1] = 0;
@@ -255,7 +259,7 @@ fn convertToAscii(
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{ .safety = false }){};
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -267,30 +271,54 @@ pub fn main() !void {
     };
     defer stb.stbi_image_free(original_img.data);
 
-    const down_scale = 2;
+    const down_scale = 8;
     const img_w = original_img.width / down_scale;
     const img_h = original_img.height / down_scale;
 
-    const downscaled_img = try allocator.alloc(u8, img_w * img_h * 3);
-    defer allocator.free(downscaled_img);
+    const downscaled_img = stb.stbir_resize_uint8_linear(
+        original_img.data,
+        @intCast(original_img.width),
+        @intCast(original_img.height),
+        0,
+        0,
+        @intCast(img_w),
+        @intCast(img_h),
+        0,
+        @intCast(original_img.channels),
+    );
+    if (downscaled_img == null) {
+        std.debug.print("Error downscaling image\n", .{});
+        return error.ImageDownscaleFailed;
+    }
+    defer stb.stbi_image_free(downscaled_img);
 
-    _ = stb.stbir_resize_uint8_linear(original_img.data, @intCast(original_img.width), @intCast(original_img.height), 0, downscaled_img.ptr, @intCast(img_w), @intCast(img_h), 0, @intCast(original_img.channels));
-    // if (downscaled_img == null) {
-    //     std.debug.print("Error downscaling image\n", .{});
-    //     return error.ImageDownscaleFailed;
-    // }
-    defer stb.stbi_image_free(downscaled_img.ptr);
+    const upscaled_img = stb.stbir_resize_uint8_linear(
+        downscaled_img,
+        @intCast(img_w),
+        @intCast(img_h),
+        0,
+        0,
+        @intCast(img_w * down_scale),
+        @intCast(img_h * down_scale),
+        0,
+        @intCast(original_img.channels),
+    );
+    if (upscaled_img == null) {
+        std.debug.print("Error upscaling image\n", .{});
+        return error.ImageUpscaleFailed;
+    }
+    defer stb.stbi_image_free(upscaled_img);
 
     const img = Image{
-        .data = downscaled_img.ptr,
-        .width = img_w,
-        .height = img_h,
+        .data = upscaled_img,
+        .width = img_w * down_scale,
+        .height = img_h * down_scale,
         .channels = original_img.channels,
     };
 
     // Output image dimensions (multiples of 8 for ASCII blocks)
-    const out_w = (img_w / CHAR_SIZE) * CHAR_SIZE;
-    const out_h = (img_h / CHAR_SIZE) * CHAR_SIZE;
+    const out_w = (img.width / CHAR_SIZE) * CHAR_SIZE;
+    const out_h = (img.height / CHAR_SIZE) * CHAR_SIZE;
 
     // Create output buffer for the ASCII art image
     const ascii_img = try allocator.alloc(u8, out_w * out_h * 3);
@@ -299,11 +327,13 @@ pub fn main() !void {
     @memset(ascii_img, 0);
 
     // Process each 8x8 block
+    // TODO: Calculate color only if args.color is true
     var y: usize = 0;
     while (y < out_h) : (y += CHAR_SIZE) {
         var x: usize = 0;
         while (x < out_w) : (x += CHAR_SIZE) {
             var sum_brightness: u64 = 0;
+            var sum_color: [3]u64 = .{ 0, 0, 0 };
             var pixel_count: u64 = 0;
 
             // Calculate average brightness in the block
@@ -326,25 +356,35 @@ pub fn main() !void {
                     const r = img.data[pixel_index];
                     const g = img.data[pixel_index + 1];
                     const b = img.data[pixel_index + 2];
-                    // Add necessary casts for u8 to comptime_float conversion
-                    const gray: u64 = (r * 30 + g * 59 + b * 11) / 100;
-                    // const gray: u64 = @intFromFloat(@as(f32, @floatFromInt(r)) * 0.3 + @as(f32, @floatFromInt(g)) * 0.59 + @as(f32, @floatFromInt(b)) * 0.11);
+                    const gray: u64 = @intFromFloat(@as(f32, @floatFromInt(r)) * 0.3 + @as(f32, @floatFromInt(g)) * 0.59 + @as(f32, @floatFromInt(b)) * 0.11);
                     sum_brightness += gray;
+                    if (args.color) {
+                        sum_color[0] += r;
+                        sum_color[1] += g;
+                        sum_color[2] += b;
+                    }
                     pixel_count += 1;
                 }
             }
 
             // Map brightness to ASCII character
             const avg_brightness: usize = @intCast(sum_brightness / pixel_count);
-            var ascii_char: u8 = 0;
-            if (avg_brightness > 223) {
-                ascii_char = ' ';
+            const ascii_char: u8 = if (avg_brightness < 32) ' ' else ASCII_CHARS[(avg_brightness * ASCII_CHARS.len) / 256];
+
+            // Calculate average color only if args.color is true
+            var avg_color: [3]u8 = undefined;
+            if (args.color) {
+                avg_color = .{
+                    @intCast(sum_color[0] / pixel_count),
+                    @intCast(sum_color[1] / pixel_count),
+                    @intCast(sum_color[2] / pixel_count),
+                };
             } else {
-                ascii_char = ASCII_CHARS[(avg_brightness * ASCII_CHARS.len) / 256];
+                avg_color = .{ 255, 255, 255 }; // Default to white if color is not used
             }
 
-            // Draw ASCII character as a grayscale block in the output image
-            convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char);
+            // Draw ASCII character in the output image
+            convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color);
         }
     }
 
@@ -373,18 +413,52 @@ test "test_load_time" {
     std.debug.print("Load time: {} ms\n", .{time_after_load - start_time});
 }
 
-test "test_load_and_write_time" {
+test "test_load_downsampleby8_upsampletooriginal_write" {
     const start_time = std.time.milliTimestamp();
-    const img = try loadImage("stb/x.jpeg");
+    const img = try loadImage("images/green_vagabond.jpg");
     defer stb.stbi_image_free(img.data);
     const time_after_load = std.time.milliTimestamp();
 
-    const result = stb.stbi_write_png("stb/x_ascii.png", @intCast(img.width), @intCast(img.height), @intCast(img.channels), img.data, @intCast(img.width * img.channels));
+    // Downsample by 8
+    const down_w = img.width / 8;
+    const down_h = img.height / 8;
+    const downsampled = stb.stbir_resize_uint8_linear(
+        img.data,
+        @intCast(img.width),
+        @intCast(img.height),
+        0,
+        0,
+        @intCast(down_w),
+        @intCast(down_h),
+        0,
+        @intCast(img.channels),
+    );
+    defer stb.stbi_image_free(downsampled);
+    const time_after_downsample = std.time.milliTimestamp();
+
+    // Upscale back to original size
+    const upscaled = stb.stbir_resize_uint8_linear(
+        downsampled,
+        @intCast(down_w),
+        @intCast(down_h),
+        0,
+        0,
+        @intCast(img.width),
+        @intCast(img.height),
+        0,
+        @intCast(img.channels),
+    );
+    defer stb.stbi_image_free(upscaled);
+    const time_after_upscale = std.time.milliTimestamp();
+
+    const result = stb.stbi_write_png("images/green_vagabond_downup.png", @intCast(img.width), @intCast(img.height), @intCast(img.channels), upscaled, @intCast(img.width * img.channels));
     const time_after_write = std.time.milliTimestamp();
 
     if (result != 0) {
         std.debug.print("Load time: {} ms\n", .{time_after_load - start_time});
-        std.debug.print("Write time: {} ms\n", .{time_after_write - time_after_load});
+        std.debug.print("Downsample time: {} ms\n", .{time_after_downsample - time_after_load});
+        std.debug.print("Upscale time: {} ms\n", .{time_after_upscale - time_after_downsample});
+        std.debug.print("Write time: {} ms\n", .{time_after_write - time_after_upscale});
         std.debug.print("Total time: {} ms\n", .{time_after_write - start_time});
     } else {
         std.debug.print("Error writing image\n", .{});
