@@ -4,6 +4,8 @@ converts an image to ascii art
 
 ## usage
 
-you can compile the `stb/main.c` file and run it or you can use the `zig build run` command to use the zig version instead.
+`zig build -Drelease run -- -i path/to/input.jpeg -o path/to/output.png`
 
-the zig version is buggy and doesn't work properly yet. working on it.
+output file needs to be a `.png` since i saw some weird issues with jpegs.
+
+the zig version is the only one i'll be working on from here on. the c code was just to get me started until i figured out some issues with the build.zig
