@@ -1,0 +1,64 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build for all targets
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64-linux, aarch64-linux, x86_64-macos, aarch64-macos]
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Zig
+      uses: goto-bus-stop/setup-zig@v2
+      with:
+        version: 0.13.0
+
+    - name: Build
+      run: |
+        zig build -Dtarget=${{ matrix.target }} -Drelease
+        mkdir -p dist
+        mv zig-out/bin/asciigen dist/asciigen-${{ matrix.target }}
+        cd dist && tar czf asciigen-${{ matrix.target }}.tar.gz asciigen-${{ matrix.target }}
+
+    - name: Generate SHA256
+      run: |
+        cd dist
+        sha256sum asciigen-${{ matrix.target }}.tar.gz > asciigen-${{ matrix.target }}.tar.gz.sha256
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: asciigen-${{ matrix.target }}
+        path: dist/asciigen-${{ matrix.target }}.tar.gz*
+
+  release:
+      name: Create Release
+      needs: build
+      runs-on: ubuntu-latest
+      steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+
+      - name: Prepare release assets
+        run: |
+          mkdir release_assets
+          mv asciigen-*/*.tar.gz* release_assets/
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release_assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

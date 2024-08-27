@@ -16,14 +16,15 @@ fn runZig(
     optimize: std.builtin.OptimizeMode,
 ) !void {
     const exe = b.addExecutable(.{
-        .name = "img2ascii",
+        .name = "asciigen",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
 
     const exe_check = b.addExecutable(.{
-        .name = "img2ascii-check",
+        .name = "asciigen-check",
         .root_source_file = b.path("src/check.zig"),
         .target = target,
         .optimize = optimize,
