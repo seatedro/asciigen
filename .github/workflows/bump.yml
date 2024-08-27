@@ -1,0 +1,19 @@
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@master
+
+      - name: Update Homebrew formula
+        uses: dawidd6/action-homebrew-bump-formula@v3
+        with:
+          token: ${{secrets.BREW_ACTION_TOKEN}}
+          no_fork: true
+          tap: seatedro/asciigen
+          formula: asciigen
