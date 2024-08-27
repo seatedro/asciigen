@@ -378,6 +378,7 @@ fn convertToAscii(
     y: usize,
     ascii_char: u8,
     color: [3]u8,
+    brightness: usize,
 ) void {
     if (ascii_char < 32 or ascii_char > 126) {
         // std.debug.print("Error: invalid ASCII character: {}\n", .{ascii_char});
@@ -399,13 +400,25 @@ fn convertToAscii(
                 const shift: u3 = @intCast(7 - dx);
                 const bit: u8 = @as(u8, 1) << shift;
                 if ((bitmap[dy] & bit) != 0) {
+                    // Character pixel: use the original color
                     img[idx] = color[0];
                     img[idx + 1] = color[1];
                     img[idx + 2] = color[2];
                 } else {
-                    img[idx] = color[0] / 4;
-                    img[idx + 1] = color[1] / 4;
-                    img[idx + 2] = color[2] / 4;
+                    // Background pixel: adjust based on brightness
+                    if (brightness > 192) { // For very bright colors
+                        img[idx] = @max(0, color[0] - 64);
+                        img[idx + 1] = @max(0, color[1] - 64);
+                        img[idx + 2] = @max(0, color[2] - 64);
+                    } else if (brightness > 64) { // For mid-range colors
+                        img[idx] = color[0] / 2;
+                        img[idx + 1] = color[1] / 2;
+                        img[idx + 2] = color[2] / 2;
+                    } else { // For dark colors
+                        img[idx] = @min(255, color[0] * 2);
+                        img[idx + 1] = @min(255, color[1] * 2);
+                        img[idx + 2] = @min(255, color[2] * 2);
+                    }
                 }
             }
         }
@@ -590,7 +603,7 @@ pub fn main() !void {
             }
 
             // Draw ASCII character in the output image
-            convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color);
+            convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color, avg_brightness);
         }
     }
 
