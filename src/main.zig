@@ -209,7 +209,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
             break :blk std.fs.path.join(allocator, &.{ current_dir, output_filename }) catch unreachable;
         },
         .color = res.args.color != 0,
-        .scale = res.args.scale orelse 8,
+        .scale = res.args.scale orelse 1,
         .detect_edges = res.args.detect_edges != 0,
         .sigma1 = res.args.sigma1 orelse 0.5,
         .sigma2 = res.args.sigma2 orelse 1.0,
