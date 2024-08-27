@@ -4,7 +4,7 @@ converts an image to ascii art
 
 ## usage
 
-### pre-built binaries
+### pre-built binaries (COMING SOON)
 
 you can download the latest release from github: [here](https://github.com/seatedro/asciigen/releases/latest)
 
