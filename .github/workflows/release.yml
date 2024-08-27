@@ -25,11 +25,11 @@ jobs:
     - name: Prepare release assets
       run: |
         mkdir release_assets
-        cd zig-out/bin
+        cd zig-out
         for dir in */; do
           target=${dir%/}
-          tar czf ../../release_assets/asciigen-$target.tar.gz -C $target asciigen
-          sha256sum ../../release_assets/asciigen-$target.tar.gz > ../../release_assets/asciigen-$target.tar.gz.sha256
+          tar cvzf ../release_assets/asciigen-$target.tar.gz $target
+          (cd ../release_assets && sha256sum asciigen-$target.tar.gz > asciigen-$target.tar.gz.sha256)
         done
 
     - name: Upload artifacts
@@ -40,6 +40,8 @@ jobs:
 
   release:
     name: Create Release and Update Homebrew
+    permissions:
+      contents: write
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -63,16 +65,7 @@ jobs:
       uses: Homebrew/actions/setup-homebrew@master
 
     - name: Update Homebrew formula
-      env:
-        HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.HOMEBREW_GITHUB_API_TOKEN }}
       run: |
-        git clone https://github.com/seatedro/asciigen.git
-        cd asciigen
-
-        # Set up git config
-        git config user.name "GitHub Action"
-        git config user.email "action@github.com"
-
         # Extract version from tag
         VERSION=${GITHUB_REF#refs/tags/v}
 
@@ -82,7 +75,6 @@ jobs:
           --no-fork \
           asciigen
 
-        # Commit and push changes
-        git add asciigen.rb
-        git commit -m "Update asciigen to $VERSION"
-        git push https://$HOMEBREW_GITHUB_API_TOKEN@github.com/seatedro/asciigen.git main
+    - name: Auto commit and push changes
+      uses: stefanzweifel/git-auto-commit-action@v5
+
