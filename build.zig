@@ -57,7 +57,7 @@ fn runZig(
         .optimize = optimize,
     });
     unit_tests.addCSourceFile(.{ .file = b.path("stb/stb.c") });
-    unit_tests.addIncludePath(b.path("stb"));
+    unit_tests.addIncludePath(dep_stb.path(""));
     const run_unit_tests = b.addRunArtifact(unit_tests);
     test_step.dependOn(&run_unit_tests.step);
 }

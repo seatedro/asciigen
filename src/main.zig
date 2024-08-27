@@ -150,6 +150,9 @@ const Args = struct {
     output: []const u8,
     color: bool,
     scale: u8,
+    detect_edges: bool,
+    sigma1: f32,
+    sigma2: f32,
 };
 
 const Image = struct {
@@ -170,7 +173,10 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         \\-i, --input <str>     Input image file
         \\-o, --output <str>    Output image file
         \\-c, --color           Use color ASCII characters
-        \\-s, --scale <u8>     Scale factor (default: 8)
+        \\-s, --scale <u8>      Scale factor (default: 8)
+        \\-e, --detect_edges    Detect edges
+        \\    --sigma1 <f32>   Sigma 1 for DoG filter (default: 0.5)
+        \\    --sigma2 <f32>   Sigma 2 for DoG filter (default: 1.0)
     );
 
     var diag = clap.Diagnostic{};
@@ -204,6 +210,9 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         },
         .color = res.args.color != 0,
         .scale = res.args.scale orelse 8,
+        .detect_edges = res.args.detect_edges != 0,
+        .sigma1 = res.args.sigma1 orelse 0.5,
+        .sigma2 = res.args.sigma2 orelse 1.0,
     };
 }
 
@@ -237,6 +246,82 @@ fn rgbToGrayScale(allocator: std.mem.Allocator, img: Image) ![]u8 {
         }
     }
     return grayscale_img;
+}
+
+fn gaussianKernel(allocator: std.mem.Allocator, sigma: f32) ![]f32 {
+    const size: usize = @intFromFloat(6 * sigma);
+    const kernel_size = if (size % 2 == 0) size + 1 else size;
+    const half: f32 = @floatFromInt(kernel_size / 2);
+
+    var kernel = try allocator.alloc(f32, kernel_size);
+    var sum: f32 = 0;
+
+    for (0..kernel_size) |i| {
+        const x = @as(f32, @floatFromInt(i)) - half;
+        kernel[i] = @exp(-(x * x) / (2 * sigma * sigma));
+        sum += kernel[i];
+    }
+
+    // Normalize the kernel
+    for (0..kernel_size) |i| {
+        kernel[i] /= sum;
+    }
+
+    return kernel;
+}
+
+fn applyGaussianBlur(allocator: std.mem.Allocator, img: Image, sigma: f32) ![]u8 {
+    const kernel = try gaussianKernel(allocator, sigma);
+    defer allocator.free(kernel);
+
+    var temp = try allocator.alloc(u8, img.width * img.height);
+    defer allocator.free(temp);
+    var res = try allocator.alloc(u8, img.width * img.height);
+
+    // Horizontal pass
+    for (0..img.height) |y| {
+        for (0..img.width) |x| {
+            var sum: f32 = 0;
+            for (0..kernel.len) |i| {
+                const ix: i32 = @as(i32, @intCast(x)) + @as(i32, @intCast(i)) - @as(i32, @intCast(kernel.len / 2));
+                if (ix >= 0 and ix < img.width) {
+                    sum += @as(f32, @floatFromInt(img.data[y * img.width + @as(usize, @intCast(ix))])) * kernel[i];
+                }
+            }
+            temp[y * img.width + x] = @intFromFloat(sum);
+        }
+    }
+
+    // Vertical pass
+    for (0..img.height) |y| {
+        for (0..img.width) |x| {
+            var sum: f32 = 0;
+            for (0..kernel.len) |i| {
+                const iy: i32 = @as(i32, @intCast(y)) + @as(i32, @intCast(i)) - @as(i32, @intCast(kernel.len / 2));
+                if (iy >= 0 and iy < img.height) {
+                    sum += @as(f32, @floatFromInt(temp[@as(usize, @intCast(iy)) * img.width + x])) * kernel[i];
+                }
+            }
+            res[y * img.width + x] = @intFromFloat(sum);
+        }
+    }
+
+    return res;
+}
+
+fn differenceOfGaussians(allocator: std.mem.Allocator, img: Image, sigma1: f32, sigma2: f32) ![]u8 {
+    const blur1 = try applyGaussianBlur(allocator, img, sigma1);
+    defer allocator.free(blur1);
+    const blur2 = try applyGaussianBlur(allocator, img, sigma2);
+    defer allocator.free(blur2);
+
+    var res = try allocator.alloc(u8, img.width * img.height);
+    for (0..img.width * img.height) |i| {
+        const diff = @as(i16, blur1[i]) - @as(i16, blur2[i]);
+        res[i] = @as(u8, @intCast(std.math.clamp(diff + 128, 0, 255)));
+    }
+
+    return res;
 }
 
 fn applySobelFilter(allocator: std.mem.Allocator, img: Image) !SobelFilter {
@@ -295,7 +380,7 @@ fn convertToAscii(
     color: [3]u8,
 ) void {
     if (ascii_char < 32 or ascii_char > 126) {
-        std.debug.print("Error: invalid ASCII character\n", .{});
+        // std.debug.print("Error: invalid ASCII character: {}\n", .{ascii_char});
         return;
     }
 
@@ -396,17 +481,27 @@ pub fn main() !void {
     }
     defer if (args.scale != 1) stb.stbi_image_free(img.data);
 
-    const grayscale_img = try rgbToGrayScale(allocator, img);
-    defer allocator.free(grayscale_img);
+    var grayscale_img: []u8 = undefined;
+    var edge_result: SobelFilter = undefined;
+    defer {
+        if (args.detect_edges) {
+            allocator.free(grayscale_img);
+            allocator.free(edge_result.magnitude);
+            allocator.free(edge_result.direction);
+        }
+    }
 
-    const edge_result = try applySobelFilter(allocator, .{
-        .data = grayscale_img.ptr,
-        .width = img.width,
-        .height = img.height,
-        .channels = 1,
-    });
-    defer allocator.free(edge_result.magnitude);
-    defer allocator.free(edge_result.direction);
+    if (args.detect_edges) {
+        grayscale_img = try rgbToGrayScale(allocator, img);
+        const dog_img = try differenceOfGaussians(allocator, .{ .data = grayscale_img.ptr, .width = img.width, .height = img.height, .channels = img.channels }, args.sigma1, args.sigma2);
+        defer allocator.free(dog_img);
+        edge_result = try applySobelFilter(allocator, .{
+            .data = dog_img.ptr,
+            .width = img.width,
+            .height = img.height,
+            .channels = 1,
+        });
+    }
 
     // Output image dimensions (multiples of 8 for ASCII blocks)
     const out_w = (img.width / CHAR_SIZE) * CHAR_SIZE;
@@ -419,7 +514,6 @@ pub fn main() !void {
     @memset(ascii_img, 0);
 
     // Process each 8x8 block
-    // TODO: Calculate color only if args.color is true
     var y: usize = 0;
     while (y < out_h) : (y += CHAR_SIZE) {
         var x: usize = 0;
@@ -458,19 +552,30 @@ pub fn main() !void {
                         sum_color[1] += g;
                         sum_color[2] += b;
                     }
-                    const edge_index = iy * img.width + ix;
-                    sum_mag += edge_result.magnitude[edge_index];
-                    sum_dir += edge_result.direction[edge_index];
+                    if (args.detect_edges) {
+                        const edge_index = iy * img.width + ix;
+                        sum_mag += edge_result.magnitude[edge_index];
+                        sum_dir += edge_result.direction[edge_index];
+                    }
                     pixel_count += 1;
                 }
             }
 
             // Map brightness to ASCII character
             const avg_brightness: usize = @intCast(sum_brightness / pixel_count);
-            const avg_mag: f32 = sum_mag / @as(f32, @floatFromInt(pixel_count));
-            const avg_dir: f32 = sum_dir / @as(f32, @floatFromInt(pixel_count));
-            const edge_char = getEdgeChar(avg_mag, avg_dir);
-            const ascii_char: u8 = if (edge_char) |ec| ec else if (avg_brightness < 32) ' ' else ASCII_CHARS[(avg_brightness * ASCII_CHARS.len) / 256];
+            var ascii_char: u8 = undefined;
+            if (args.detect_edges) {
+                const avg_mag: f32 = sum_mag / @as(f32, @floatFromInt(pixel_count));
+                const avg_dir: f32 = sum_dir / @as(f32, @floatFromInt(pixel_count));
+                const edge_char = getEdgeChar(avg_mag, avg_dir);
+                if (edge_char) |ec| {
+                    ascii_char = ec;
+                } else {
+                    ascii_char = if (avg_brightness < 32) ' ' else ASCII_CHARS[(avg_brightness * ASCII_CHARS.len) / 256];
+                }
+            } else {
+                ascii_char = if (avg_brightness < 32) ' ' else ASCII_CHARS[(avg_brightness * ASCII_CHARS.len) / 256];
+            }
 
             // Calculate average color only if args.color is true
             var avg_color: [3]u8 = undefined;
@@ -564,4 +669,36 @@ test "test_load_downsampleby8_upsampletooriginal_write" {
     } else {
         std.debug.print("Error writing image\n", .{});
     }
+}
+test "test_difference_of_gaussians" {
+    const allocator = std.testing.allocator;
+
+    // Load the image
+    const img = try loadImage("images/pink_vagabond.jpg");
+    defer stb.stbi_image_free(img.data);
+
+    // Convert to grayscale
+    const grayscale_img = try rgbToGrayScale(allocator, img);
+    defer allocator.free(grayscale_img);
+
+    // Apply difference of gaussians
+    const dog_img = try differenceOfGaussians(allocator, .{
+        .data = grayscale_img.ptr,
+        .width = img.width,
+        .height = img.height,
+        .channels = 1,
+    }, 0.3, 1.0);
+    defer allocator.free(dog_img);
+
+    // Save the result
+    const result = stb.stbi_write_png(
+        "images/test_dog_result.png",
+        @intCast(img.width),
+        @intCast(img.height),
+        1,
+        dog_img.ptr,
+        @intCast(img.width),
+    );
+
+    try std.testing.expect(result != 0);
 }
