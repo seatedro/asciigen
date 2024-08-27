@@ -8,7 +8,7 @@ const stb = @cImport({
 });
 
 // VARS
-const ASCII_CHARS = "@%#*+=-:. ";
+const ASCII_CHARS = " .:-=+*%#@"; // low to high brightness
 const CHAR_SIZE = 8;
 const THRESHOLD = 50;
 
@@ -363,9 +363,9 @@ fn getEdgeChar(mag: f32, dir: f32) ?u8 {
     const angle = (dir + std.math.pi) * (@as(f32, 180) / std.math.pi);
     return switch (@as(u8, @intFromFloat(@mod(angle + 22.5, 180) / 45))) {
         0, 4 => '-',
-        1, 5 => '\\',
+        1, 5 => '/',
         2, 6 => '|',
-        3, 7 => '/',
+        3, 7 => '\\',
         else => unreachable,
     };
 }
@@ -378,7 +378,6 @@ fn convertToAscii(
     y: usize,
     ascii_char: u8,
     color: [3]u8,
-    brightness: usize,
 ) void {
     if (ascii_char < 32 or ascii_char > 126) {
         // std.debug.print("Error: invalid ASCII character: {}\n", .{ascii_char});
@@ -405,20 +404,10 @@ fn convertToAscii(
                     img[idx + 1] = color[1];
                     img[idx + 2] = color[2];
                 } else {
-                    // Background pixel: adjust based on brightness
-                    if (brightness > 192) { // For very bright colors
-                        img[idx] = @max(0, color[0] - 64);
-                        img[idx + 1] = @max(0, color[1] - 64);
-                        img[idx + 2] = @max(0, color[2] - 64);
-                    } else if (brightness > 64) { // For mid-range colors
-                        img[idx] = color[0] / 2;
-                        img[idx + 1] = color[1] / 2;
-                        img[idx + 2] = color[2] / 2;
-                    } else { // For dark colors
-                        img[idx] = @min(255, color[0] * 2);
-                        img[idx + 1] = @min(255, color[1] * 2);
-                        img[idx + 2] = @min(255, color[2] * 2);
-                    }
+                    // not a character pixel: set to black
+                    img[idx] = 0;
+                    img[idx + 1] = 0;
+                    img[idx + 2] = 0;
                 }
             }
         }
@@ -506,7 +495,12 @@ pub fn main() !void {
 
     if (args.detect_edges) {
         grayscale_img = try rgbToGrayScale(allocator, img);
-        const dog_img = try differenceOfGaussians(allocator, .{ .data = grayscale_img.ptr, .width = img.width, .height = img.height, .channels = img.channels }, args.sigma1, args.sigma2);
+        const dog_img = try differenceOfGaussians(allocator, .{
+            .data = grayscale_img.ptr,
+            .width = img.width,
+            .height = img.height,
+            .channels = img.channels,
+        }, args.sigma1, args.sigma2);
         defer allocator.free(dog_img);
         edge_result = try applySobelFilter(allocator, .{
             .data = dog_img.ptr,
@@ -603,7 +597,7 @@ pub fn main() !void {
             }
 
             // Draw ASCII character in the output image
-            convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color, avg_brightness);
+            convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color);
         }
     }
 
