@@ -65,16 +65,9 @@ jobs:
       uses: Homebrew/actions/setup-homebrew@master
 
     - name: Update Homebrew formula
-      run: |
-        # Extract version from tag
-        VERSION=${GITHUB_REF#refs/tags/v}
-
-        # Update formula
-        brew bump-formula-pr --no-browse --no-audit \
-          --version=$VERSION \
-          --no-fork \
-          asciigen
-
-    - name: Auto commit and push changes
-      uses: stefanzweifel/git-auto-commit-action@v5
-
+      uses: dawidd6/action-homebrew-bump-formula@v3
+      with:
+        token: ${{secrets.BREW_ACTION_TOKEN}}
+        no_fork: true
+        tap: seatedro/asciigen
+        formula: asciigen
