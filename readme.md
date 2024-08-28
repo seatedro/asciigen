@@ -12,6 +12,13 @@ you can download the latest release from github: [here](https://github.com/seate
 
 `zig build -Drelease`
 
+the above command builds an executable found at `./zig-out/bin`
+
+if you want to just directly run the executable, run:
+
+`zig build run -Drelease -- [options]`
+
+see below for explanations for available options
 
 ## usage
 
