@@ -33,17 +33,17 @@ run the program with the following options (the default zig install directory is
 
    basic usage:
    ```
-   asciigen -i input.jpg
+   asciigen -i input.jpg -o output.png
    ```
 
-   using color and custom output:
+   using color:
    ```
    asciigen -i input.png -o output.png -c
    ```
 
-   with edge detection and custom scale:
+   with edge detection, color, and custom downscale: 
    ```
-   asciigen -i input.jpg -s 4 -e
+   asciigen -i input.jpeg -o output.png -s 4 -e -c
    ```
 
 3. the program will generate an ascii art version of your input image and save it as a new image file.
