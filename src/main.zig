@@ -216,6 +216,12 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
     };
 }
 
+/// Okay so this is an insane bug. If a user passes in a .png file as input,
+/// it works fine most of the time. But SOMETIMES, for reasons unknown to me,
+/// the ascii art conversion gets absolutely NUKED. I'm not sure what's going
+/// but to fix it, I'm going to try to re-encode the image as a JPEG and then
+/// load it again. This is a very hacky solution, but it works. If anyone has
+/// any ideas on how to fix this, please let me know.
 fn loadImage(path: []const u8) !Image {
     var w: c_int = undefined;
     var h: c_int = undefined;
@@ -224,6 +230,46 @@ fn loadImage(path: []const u8) !Image {
     if (@intFromPtr(data) == 0) {
         std.debug.print("Error loading image: {s}\n", .{path});
         return error.ImageLoadFailed;
+    }
+
+    const ext = std.fs.path.extension(path);
+    if (std.mem.eql(u8, ext, ".png")) {
+        defer stb.stbi_image_free(data);
+        // Create a temporary file for the re-encoded image
+        var tmp_path_buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+        const tmp_path = try std.fmt.bufPrintZ(&tmp_path_buf, "{s}.tmp.jpg", .{path});
+
+        // Re-encode the image as JPEG
+        const write_result = stb.stbi_write_jpg(
+            tmp_path.ptr,
+            w,
+            h,
+            chan,
+            data,
+            100, // quality
+        );
+        if (write_result == 0) {
+            return error.ImageReEncodeFailed;
+        }
+
+        // Load the re-encoded image
+        const reencoded_data = stb.stbi_load(tmp_path.ptr, &w, &h, &chan, 0);
+        if (@intFromPtr(reencoded_data) == 0) {
+            std.debug.print("Error loading re-encoded image\n", .{});
+            return error.ImageLoadFailed;
+        }
+
+        // Delete the temporary file
+        std.fs.deleteFileAbsolute(tmp_path) catch |err| {
+            std.debug.print("Warning: Failed to delete temporary file: {}\n", .{err});
+        };
+
+        return Image{
+            .data = reencoded_data,
+            .width = @intCast(w),
+            .height = @intCast(h),
+            .channels = @intCast(chan),
+        };
     }
 
     return Image{
