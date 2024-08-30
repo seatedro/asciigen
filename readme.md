@@ -28,29 +28,36 @@ run the program with the following options (the default zig install directory is
    ```
 1. options:
    - `-h, --help`: print the help message and exit
-   - `-i, --input <file>`: specify the input image file (required)
+   - `-i, --input <file>`: specify the input image file path (local path/URL) (required)
    - `-o, --output <file>`: specify the output image file (optional, default: `<input>_ascii.jpg`)
    - `-c, --color`: use color ascii characters (optional)
-   - `-s, --scale <number>`: set the downscale factor (optional, default: 1)
+   - `-s, --scale <int>`: set the downscale factor (optional, default: 1)
    - `-e, --detect_edges`: enable edge detection (optional)
-   - `--sigma1 <number>`: set the sigma1 value for DoG filter (optional, default: 0.3)
-   - `--sigma2 <number>`: set the sigma2 value for DoG filter (optional, default: 1.0)
+   - `--sigma1 <int>`: set the sigma1 value for DoG filter (optional, default: 0.3)
+   - `--sigma2 <int>`: set the sigma2 value for DoG filter (optional, default: 1.0)
+   - `-b, --brightness_boost <float>`: increase/decrease perceived brightness (optional, default: 1.0)
 
 2. examples:
 
    basic usage:
-   ```
+   ```bash
    asciigen -i input.jpg -o output.png
    ```
 
    using color:
-   ```
+   ```bash
    asciigen -i input.png -o output.png -c
    ```
 
    with edge detection, color, and custom downscale: 
-   ```
+   ```bash
    asciigen -i input.jpeg -o output.png -s 4 -e -c
+   ```
+
+   with brightness boost and url input:
+   ```bash
+   # bonus (this is a sweet wallpaper)
+   asciigen -i "https://w.wallhaven.cc/full/p9/wallhaven-p9gr2p.jpg" -o output.png -c -e -b 1.5
    ```
 
 3. the program will generate an ascii art version of your input image and save it as a new image file.

@@ -219,17 +219,63 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
     };
 }
 
+fn downloadImage(allocator: std.mem.Allocator, url: []const u8) ![]u8 {
+    var client = std.http.Client{ .allocator = allocator };
+    defer client.deinit();
+
+    const uri = try std.Uri.parse(url);
+
+    var buf: [4096]u8 = undefined;
+    var req = try client.open(.GET, uri, .{ .server_header_buffer = &buf });
+    defer req.deinit();
+
+    // Sending HTTP req headers
+    try req.send();
+    try req.finish();
+
+    // Wait for response
+    try req.wait();
+
+    if (req.response.status != .ok) {
+        return error.HttpRequestFailed;
+    }
+
+    const content_len = req.response.content_length orelse return error.NoContentLength;
+    const body = try allocator.alloc(u8, content_len);
+    errdefer allocator.free(body);
+
+    const bytes_read = try req.readAll(body);
+    if (bytes_read != content_len) {
+        return error.IncompleteRead;
+    }
+
+    return body;
+}
+
 /// Okay so this is an insane bug. If a user passes in a .png file as input,
 /// it works fine most of the time. But SOMETIMES, for reasons unknown to me,
 /// the ascii art conversion gets absolutely NUKED. I'm not sure what's going
 /// but to fix it, I'm going to try to re-encode the image as a JPEG and then
 /// load it again. This is a very hacky solution, but it works. If anyone has
 /// any ideas on how to fix this, please let me know.
-fn loadImage(path: []const u8) !Image {
+fn loadImage(allocator: std.mem.Allocator, path: []const u8) !Image {
+    const is_url = std.mem.startsWith(u8, path, "http://") or std.mem.startsWith(u8, path, "https://");
+
+    var image_data: []u8 = undefined;
+    defer if (is_url) allocator.free(image_data);
+
+    if (is_url) {
+        image_data = try downloadImage(allocator, path);
+    }
+
     var w: c_int = undefined;
     var h: c_int = undefined;
     var chan: c_int = undefined;
-    const data = stb.stbi_load(path.ptr, &w, &h, &chan, 0);
+    const data = if (is_url)
+        stb.stbi_load_from_memory(image_data.ptr, @intCast(image_data.len), &w, &h, &chan, 0)
+    else
+        stb.stbi_load(path.ptr, &w, &h, &chan, 0);
+
     if (@intFromPtr(data) == 0) {
         std.debug.print("Error loading image: {s}\n", .{path});
         return error.ImageLoadFailed;
@@ -240,7 +286,8 @@ fn loadImage(path: []const u8) !Image {
         defer stb.stbi_image_free(data);
         // Create a temporary file for the re-encoded image
         var tmp_path_buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-        const tmp_path = try std.fmt.bufPrintZ(&tmp_path_buf, "{s}.tmp.jpg", .{path});
+        const ts = std.time.timestamp();
+        const tmp_path = try std.fmt.bufPrintZ(&tmp_path_buf, "asciigen-tmp-{d}.jpg", .{ts});
 
         // Re-encode the image as JPEG
         const write_result = stb.stbi_write_jpg(
@@ -470,7 +517,7 @@ pub fn main() !void {
 
     const args = try parseArgs(allocator);
 
-    const original_img = loadImage(args.input) catch |err| {
+    const original_img = loadImage(allocator, args.input) catch |err| {
         std.debug.print("Error loading image: {}\n", .{err});
         return err;
     };
