@@ -153,6 +153,7 @@ const Args = struct {
     detect_edges: bool,
     sigma1: f32,
     sigma2: f32,
+    brightness_boost: f32,
 };
 
 const Image = struct {
@@ -177,6 +178,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         \\-e, --detect_edges    Detect edges
         \\    --sigma1 <f32>   Sigma 1 for DoG filter (default: 0.5)
         \\    --sigma2 <f32>   Sigma 2 for DoG filter (default: 1.0)
+        \\-b, --brightness_boost <f32>   Brightness boost (default: 1.0)
     );
 
     var diag = clap.Diagnostic{};
@@ -213,6 +215,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         .detect_edges = res.args.detect_edges != 0,
         .sigma1 = res.args.sigma1 orelse 0.5,
         .sigma2 = res.args.sigma2 orelse 1.0,
+        .brightness_boost = res.args.brightness_boost orelse 1.0,
     };
 }
 
@@ -616,6 +619,9 @@ pub fn main() !void {
 
             // Map brightness to ASCII character
             const avg_brightness: usize = @intCast(sum_brightness / pixel_count);
+            // Boost brightness if > 1.0
+            const boosted_brightness: usize = @intFromFloat(@as(f32, @floatFromInt(avg_brightness)) * args.brightness_boost);
+            const clamped_brightness = std.math.clamp(boosted_brightness, 0, 255);
             var ascii_char: u8 = undefined;
             if (args.detect_edges) {
                 const avg_mag: f32 = sum_mag / @as(f32, @floatFromInt(pixel_count));
@@ -624,10 +630,10 @@ pub fn main() !void {
                 if (edge_char) |ec| {
                     ascii_char = ec;
                 } else {
-                    ascii_char = if (avg_brightness < 32) ' ' else ASCII_CHARS[(avg_brightness * ASCII_CHARS.len) / 256];
+                    ascii_char = if (clamped_brightness == 0) ' ' else ASCII_CHARS[(clamped_brightness * ASCII_CHARS.len) / 256];
                 }
             } else {
-                ascii_char = if (avg_brightness < 32) ' ' else ASCII_CHARS[(avg_brightness * ASCII_CHARS.len) / 256];
+                ascii_char = if (clamped_brightness == 0) ' ' else ASCII_CHARS[(clamped_brightness * ASCII_CHARS.len) / 256];
             }
 
             // Calculate average color only if args.color is true
