@@ -31,10 +31,10 @@ run the program with the following options (the default zig install directory is
    - `-i, --input <file>`: specify the input image file path (local path/URL) (required)
    - `-o, --output <file>`: specify the output image file (optional, default: `<input>_ascii.jpg`)
    - `-c, --color`: use color ascii characters (optional)
-   - `-s, --scale <int>`: set the downscale factor (optional, default: 1)
+   - `-s, --scale <float>`: set the downscale or upscale factor (optional, default: 1)
    - `-e, --detect_edges`: enable edge detection (optional)
-   - `--sigma1 <int>`: set the sigma1 value for DoG filter (optional, default: 0.3)
-   - `--sigma2 <int>`: set the sigma2 value for DoG filter (optional, default: 1.0)
+   - `--sigma1 <float>`: set the sigma1 value for DoG filter (optional, default: 0.3)
+   - `--sigma2 <float>`: set the sigma2 value for DoG filter (optional, default: 1.0)
    - `-b, --brightness_boost <float>`: increase/decrease perceived brightness (optional, default: 1.0)
 
 2. examples:
