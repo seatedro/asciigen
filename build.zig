@@ -100,6 +100,7 @@ fn runZig(
         .root_source_file = b.path("src/main.zig"),
         .target = b.resolveTargetQuery(target),
         .optimize = optimize,
+        .link_libc = true,
     });
     unit_tests.addCSourceFile(.{ .file = b.path("stb/stb.c") });
     unit_tests.addIncludePath(dep_stb.path(""));

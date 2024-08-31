@@ -731,7 +731,12 @@ test "test_ascii_generation" {
 
     // Create a temporary file path
     var tmp_path_buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-    const tmp_path = try std.fmt.bufPrintZ(&tmp_path_buf, "test_ascii_output.png", .{});
+    try std.fs.cwd().makePath("test_output");
+    const tmp_path = try std.fmt.bufPrintZ(
+        &tmp_path_buf,
+        "test_output/test_ascii_output.png",
+        .{},
+    );
 
     // Set up test arguments
     const test_args = Args{
