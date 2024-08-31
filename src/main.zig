@@ -749,6 +749,7 @@ test "test_ascii_generation" {
         .input = "https://w.wallhaven.cc/full/p9/wallhaven-p9gr2p.jpg",
         .output = tmp_path,
         .color = false,
+        .invert_color = false,
         .scale = 8.0,
         .detect_edges = false,
         .sigma1 = 0.5,
