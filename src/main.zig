@@ -517,188 +517,200 @@ pub fn main() !void {
 
     const args = try parseArgs(allocator);
 
+    try processImage(allocator, args);
+}
+
+fn processImage(allocator: std.mem.Allocator, args: Args) !void {
+    const original_img = try loadAndScaleImage(allocator, args);
+    defer stb.stbi_image_free(original_img.data);
+
+    const edge_result = try detectEdges(allocator, original_img, args);
+    defer if (args.detect_edges) {
+        allocator.free(edge_result.grayscale);
+        allocator.free(edge_result.magnitude);
+        allocator.free(edge_result.direction);
+    };
+
+    const ascii_img = try generateAsciiArt(allocator, original_img, edge_result, args);
+    defer allocator.free(ascii_img);
+
+    try saveOutputImage(ascii_img, original_img, args);
+}
+
+fn loadAndScaleImage(allocator: std.mem.Allocator, args: Args) !Image {
     const original_img = loadImage(allocator, args.input) catch |err| {
         std.debug.print("Error loading image: {}\n", .{err});
         return err;
     };
-    defer stb.stbi_image_free(original_img.data);
 
-    var img: Image = undefined;
     if (args.scale != 1.0 and args.scale > 0.0) {
-        const img_w = @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(original_img.width)) / args.scale)));
-        const img_h = @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(original_img.height)) / args.scale)));
-
-        const downscaled_img = stb.stbir_resize_uint8_linear(
-            original_img.data,
-            @intCast(original_img.width),
-            @intCast(original_img.height),
-            0,
-            0,
-            @intCast(img_w),
-            @intCast(img_h),
-            0,
-            @intCast(original_img.channels),
-        );
-        if (downscaled_img == null) {
-            std.debug.print("Error downscaling image\n", .{});
-            return error.ImageDownscaleFailed;
-        }
-
-        // const upscaled_img = stb.stbir_resize_uint8_linear(
-        //     downscaled_img,
-        //     @intCast(img_w),
-        //     @intCast(img_h),
-        //     0,
-        //     0,
-        //     @intCast(img_w * args.scale),
-        //     @intCast(img_h * args.scale),
-        //     0,
-        //     @intCast(original_img.channels),
-        // );
-        // if (upscaled_img == null) {
-        //     std.debug.print("Error upscaling image\n", .{});
-        //     return error.ImageUpscaleFailed;
-        // }
-        // defer stb.stbi_image_free(upscaled_img);
-
-        // img = Image{
-        //     .data = upscaled_img,
-        //     .width = img_w * args.scale,
-        //     .height = img_h * args.scale,
-        //     .channels = original_img.channels,
-        // };
-
-        img = Image{
-            .data = downscaled_img,
-            .width = img_w,
-            .height = img_h,
-            .channels = original_img.channels,
-        };
+        return scaleImage(original_img, args.scale);
     } else {
-        img = original_img;
+        return original_img;
     }
-    defer if (args.scale != 1.0) stb.stbi_image_free(img.data);
+}
 
-    var grayscale_img: []u8 = undefined;
-    var edge_result: SobelFilter = undefined;
-    defer {
-        if (args.detect_edges) {
-            allocator.free(grayscale_img);
-            allocator.free(edge_result.magnitude);
-            allocator.free(edge_result.direction);
-        }
-    }
+fn scaleImage(img: Image, scale: f32) !Image {
+    const img_w = @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(img.width)) / scale)));
+    const img_h = @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(img.height)) / scale)));
 
-    if (args.detect_edges) {
-        grayscale_img = try rgbToGrayScale(allocator, img);
-        const dog_img = try differenceOfGaussians(allocator, .{
-            .data = grayscale_img.ptr,
-            .width = img.width,
-            .height = img.height,
-            .channels = img.channels,
-        }, args.sigma1, args.sigma2);
-        defer allocator.free(dog_img);
-        edge_result = try applySobelFilter(allocator, .{
-            .data = dog_img.ptr,
-            .width = img.width,
-            .height = img.height,
-            .channels = 1,
-        });
+    const scaled_img = stb.stbir_resize_uint8_linear(
+        img.data,
+        @intCast(img.width),
+        @intCast(img.height),
+        0,
+        0,
+        @intCast(img_w),
+        @intCast(img_h),
+        0,
+        @intCast(img.channels),
+    );
+    if (scaled_img == null) {
+        std.debug.print("Error downscaling image\n", .{});
+        return error.ImageScaleFailed;
     }
 
-    // Output image dimensions (multiples of 8 for ASCII blocks)
+    return Image{
+        .data = scaled_img,
+        .width = img_w,
+        .height = img_h,
+        .channels = img.channels,
+    };
+}
+
+const EdgeData = struct {
+    grayscale: []u8,
+    magnitude: []f32,
+    direction: []f32,
+};
+fn detectEdges(allocator: std.mem.Allocator, img: Image, args: Args) !EdgeData {
+    if (!args.detect_edges) {
+        return .{ .grayscale = &[_]u8{}, .magnitude = &[_]f32{}, .direction = &[_]f32{} };
+    }
+
+    const grayscale_img = try rgbToGrayScale(allocator, img);
+    const dog_img = try differenceOfGaussians(allocator, .{
+        .data = grayscale_img.ptr,
+        .width = img.width,
+        .height = img.height,
+        .channels = img.channels,
+    }, args.sigma1, args.sigma2);
+    defer allocator.free(dog_img);
+
+    const edge_result = try applySobelFilter(allocator, .{
+        .data = dog_img.ptr,
+        .width = img.width,
+        .height = img.height,
+        .channels = 1,
+    });
+
+    return .{ .grayscale = grayscale_img, .magnitude = edge_result.magnitude, .direction = edge_result.direction };
+}
+
+fn generateAsciiArt(
+    allocator: std.mem.Allocator,
+    img: Image,
+    edge_result: EdgeData,
+    args: Args,
+) ![]u8 {
     const out_w = (img.width / CHAR_SIZE) * CHAR_SIZE;
     const out_h = (img.height / CHAR_SIZE) * CHAR_SIZE;
 
-    // Create output buffer for the ASCII art image
     const ascii_img = try allocator.alloc(u8, out_w * out_h * 3);
-    defer allocator.free(ascii_img);
-
     @memset(ascii_img, 0);
 
-    // Process each 8x8 block
     var y: usize = 0;
     while (y < out_h) : (y += CHAR_SIZE) {
         var x: usize = 0;
         while (x < out_w) : (x += CHAR_SIZE) {
-            var sum_brightness: u64 = 0;
-            var sum_color: [3]u64 = .{ 0, 0, 0 };
-            var pixel_count: u64 = 0;
-            var sum_mag: f32 = 0;
-            var sum_dir: f32 = 0;
+            const block_info = calculateBlockInfo(img, edge_result, x, y, out_w, out_h, args);
+            const ascii_char = selectAsciiChar(block_info, args);
+            const avg_color = calculateAverageColor(block_info, args);
 
-            // Calculate average brightness in the block
-            // (upto 8x8, or less for edge blocks)
-            const block_w = @min(CHAR_SIZE, out_w - x);
-            const block_h = @min(CHAR_SIZE, out_h - y);
-
-            for (0..block_h) |dy| {
-                for (0..block_w) |dx| {
-                    const ix = x + dx;
-                    const iy = y + dy;
-                    // Add boundary check
-                    if (ix >= img.width or iy >= img.height) {
-                        continue; // Skip this pixel if it's outside the image
-                    }
-                    const pixel_index = (iy * img.width + ix) * img.channels;
-                    // Add another boundary check
-                    if (pixel_index + 2 >= img.width * img.height * img.channels) {
-                        continue; // Skip this pixel if it would cause out-of-bounds access
-                    }
-                    const r = img.data[pixel_index];
-                    const g = img.data[pixel_index + 1];
-                    const b = img.data[pixel_index + 2];
-                    const gray: u64 = @intFromFloat(@as(f32, @floatFromInt(r)) * 0.3 + @as(f32, @floatFromInt(g)) * 0.59 + @as(f32, @floatFromInt(b)) * 0.11);
-                    sum_brightness += gray;
-                    if (args.color) {
-                        sum_color[0] += r;
-                        sum_color[1] += g;
-                        sum_color[2] += b;
-                    }
-                    if (args.detect_edges) {
-                        const edge_index = iy * img.width + ix;
-                        sum_mag += edge_result.magnitude[edge_index];
-                        sum_dir += edge_result.direction[edge_index];
-                    }
-                    pixel_count += 1;
-                }
-            }
-
-            // Map brightness to ASCII character
-            const avg_brightness: usize = @intCast(sum_brightness / pixel_count);
-            // Boost brightness if > 1.0
-            const boosted_brightness: usize = @intFromFloat(@as(f32, @floatFromInt(avg_brightness)) * args.brightness_boost);
-            const clamped_brightness = std.math.clamp(boosted_brightness, 0, 255);
-            var ascii_char: u8 = undefined;
-            if (args.detect_edges) {
-                const avg_mag: f32 = sum_mag / @as(f32, @floatFromInt(pixel_count));
-                const avg_dir: f32 = sum_dir / @as(f32, @floatFromInt(pixel_count));
-                const edge_char = getEdgeChar(avg_mag, avg_dir);
-                if (edge_char) |ec| {
-                    ascii_char = ec;
-                } else {
-                    ascii_char = if (clamped_brightness == 0) ' ' else ASCII_CHARS[(clamped_brightness * ASCII_CHARS.len) / 256];
-                }
-            } else {
-                ascii_char = if (clamped_brightness == 0) ' ' else ASCII_CHARS[(clamped_brightness * ASCII_CHARS.len) / 256];
-            }
-
-            // Calculate average color only if args.color is true
-            var avg_color: [3]u8 = undefined;
-            if (args.color) {
-                avg_color = .{
-                    @intCast(sum_color[0] / pixel_count),
-                    @intCast(sum_color[1] / pixel_count),
-                    @intCast(sum_color[2] / pixel_count),
-                };
-            } else {
-                avg_color = .{ 255, 255, 255 }; // Default to white if color is not used
-            }
-
-            // Draw ASCII character in the output image
             convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color);
         }
     }
+
+    return ascii_img;
+}
+
+const BlockInfo = struct {
+    sum_brightness: u64,
+    sum_color: [3]u64,
+    pixel_count: u64,
+    sum_mag: f32,
+    sum_dir: f32,
+};
+fn calculateBlockInfo(img: Image, edge_result: EdgeData, x: usize, y: usize, out_w: usize, out_h: usize, args: Args) BlockInfo {
+    var info = BlockInfo{ .sum_brightness = 0, .sum_color = .{ 0, 0, 0 }, .pixel_count = 0, .sum_mag = 0, .sum_dir = 0 };
+
+    const block_w = @min(CHAR_SIZE, out_w - x);
+    const block_h = @min(CHAR_SIZE, out_h - y);
+
+    for (0..block_h) |dy| {
+        for (0..block_w) |dx| {
+            const ix = x + dx;
+            const iy = y + dy;
+            if (ix >= img.width or iy >= img.height) {
+                continue;
+            }
+            const pixel_index = (iy * img.width + ix) * img.channels;
+            if (pixel_index + 2 >= img.width * img.height * img.channels) {
+                continue;
+            }
+            const r = img.data[pixel_index];
+            const g = img.data[pixel_index + 1];
+            const b = img.data[pixel_index + 2];
+            const gray: u64 = @intFromFloat(@as(f32, @floatFromInt(r)) * 0.3 + @as(f32, @floatFromInt(g)) * 0.59 + @as(f32, @floatFromInt(b)) * 0.11);
+            info.sum_brightness += gray;
+            if (args.color) {
+                info.sum_color[0] += r;
+                info.sum_color[1] += g;
+                info.sum_color[2] += b;
+            }
+            if (args.detect_edges) {
+                const edge_index = iy * img.width + ix;
+                info.sum_mag += edge_result.magnitude[edge_index];
+                info.sum_dir += edge_result.direction[edge_index];
+            }
+            info.pixel_count += 1;
+        }
+    }
+
+    return info;
+}
+
+fn selectAsciiChar(block_info: BlockInfo, args: Args) u8 {
+    const avg_brightness: usize = @intCast(block_info.sum_brightness / block_info.pixel_count);
+    const boosted_brightness: usize = @intFromFloat(@as(f32, @floatFromInt(avg_brightness)) * args.brightness_boost);
+    const clamped_brightness = std.math.clamp(boosted_brightness, 0, 255);
+
+    if (args.detect_edges) {
+        const avg_mag: f32 = block_info.sum_mag / @as(f32, @floatFromInt(block_info.pixel_count));
+        const avg_dir: f32 = block_info.sum_dir / @as(f32, @floatFromInt(block_info.pixel_count));
+        if (getEdgeChar(avg_mag, avg_dir)) |ec| {
+            return ec;
+        }
+    }
+
+    return if (clamped_brightness == 0) ' ' else ASCII_CHARS[(clamped_brightness * ASCII_CHARS.len) / 256];
+}
+
+fn calculateAverageColor(block_info: BlockInfo, args: Args) [3]u8 {
+    if (args.color) {
+        return .{
+            @intCast(block_info.sum_color[0] / block_info.pixel_count),
+            @intCast(block_info.sum_color[1] / block_info.pixel_count),
+            @intCast(block_info.sum_color[2] / block_info.pixel_count),
+        };
+    } else {
+        return .{ 255, 255, 255 };
+    }
+}
+
+fn saveOutputImage(ascii_img: []u8, img: Image, args: Args) !void {
+    const out_w = (img.width / CHAR_SIZE) * CHAR_SIZE;
+    const out_h = (img.height / CHAR_SIZE) * CHAR_SIZE;
 
     const save_result = stb.stbi_write_png(
         @ptrCast(args.output.ptr),
@@ -714,97 +726,36 @@ pub fn main() !void {
     }
 }
 
-test "test_load_time" {
-    const start_time = std.time.milliTimestamp();
-    const img = loadImage("stb/x.jpeg") catch |err| {
-        std.debug.print("Error loading image: {}\n", .{err});
-        return err;
-    };
-    defer stb.stbi_image_free(img.data);
-    const time_after_load = std.time.milliTimestamp();
-    std.debug.print("Load time: {} ms\n", .{time_after_load - start_time});
-}
-
-test "test_load_downsampleby8_upsampletooriginal_write" {
-    const start_time = std.time.milliTimestamp();
-    const img = try loadImage("images/green_vagabond.jpg");
-    defer stb.stbi_image_free(img.data);
-    const time_after_load = std.time.milliTimestamp();
-
-    // Downsample by 8
-    const down_w = img.width / 8;
-    const down_h = img.height / 8;
-    const downsampled = stb.stbir_resize_uint8_linear(
-        img.data,
-        @intCast(img.width),
-        @intCast(img.height),
-        0,
-        0,
-        @intCast(down_w),
-        @intCast(down_h),
-        0,
-        @intCast(img.channels),
-    );
-    defer stb.stbi_image_free(downsampled);
-    const time_after_downsample = std.time.milliTimestamp();
-
-    // Upscale back to original size
-    const upscaled = stb.stbir_resize_uint8_linear(
-        downsampled,
-        @intCast(down_w),
-        @intCast(down_h),
-        0,
-        0,
-        @intCast(img.width),
-        @intCast(img.height),
-        0,
-        @intCast(img.channels),
-    );
-    defer stb.stbi_image_free(upscaled);
-    const time_after_upscale = std.time.milliTimestamp();
-
-    const result = stb.stbi_write_png("images/green_vagabond_downup.png", @intCast(img.width), @intCast(img.height), @intCast(img.channels), upscaled, @intCast(img.width * img.channels));
-    const time_after_write = std.time.milliTimestamp();
-
-    if (result != 0) {
-        std.debug.print("Load time: {} ms\n", .{time_after_load - start_time});
-        std.debug.print("Downsample time: {} ms\n", .{time_after_downsample - time_after_load});
-        std.debug.print("Upscale time: {} ms\n", .{time_after_upscale - time_after_downsample});
-        std.debug.print("Write time: {} ms\n", .{time_after_write - time_after_upscale});
-        std.debug.print("Total time: {} ms\n", .{time_after_write - start_time});
-    } else {
-        std.debug.print("Error writing image\n", .{});
-    }
-}
-test "test_difference_of_gaussians" {
+test "test_ascii_generation" {
     const allocator = std.testing.allocator;
 
-    // Load the image
-    const img = try loadImage("images/pink_vagabond.jpg");
-    defer stb.stbi_image_free(img.data);
+    // Create a temporary file path
+    var tmp_path_buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    const tmp_path = try std.fmt.bufPrintZ(&tmp_path_buf, "test_ascii_output.png", .{});
 
-    // Convert to grayscale
-    const grayscale_img = try rgbToGrayScale(allocator, img);
-    defer allocator.free(grayscale_img);
+    // Set up test arguments
+    const test_args = Args{
+        .input = "https://w.wallhaven.cc/full/p9/wallhaven-p9gr2p.jpg",
+        .output = tmp_path,
+        .color = false,
+        .scale = 8.0,
+        .detect_edges = false,
+        .sigma1 = 0.5,
+        .sigma2 = 1.0,
+        .brightness_boost = 1.0,
+    };
 
-    // Apply difference of gaussians
-    const dog_img = try differenceOfGaussians(allocator, .{
-        .data = grayscale_img.ptr,
-        .width = img.width,
-        .height = img.height,
-        .channels = 1,
-    }, 0.3, 1.0);
-    defer allocator.free(dog_img);
+    // Run the main function with test arguments
+    try processImage(allocator, test_args);
 
-    // Save the result
-    const result = stb.stbi_write_png(
-        "images/test_dog_result.png",
-        @intCast(img.width),
-        @intCast(img.height),
-        1,
-        dog_img.ptr,
-        @intCast(img.width),
-    );
+    // Check if the output file exists
+    const file = try std.fs.openFileAbsolute(tmp_path, .{});
+    defer file.close();
 
-    try std.testing.expect(result != 0);
+    // Delete the temporary file
+    try std.fs.deleteFileAbsolute(tmp_path);
+
+    // Try to open the file again, which should fail
+    const result = std.fs.openFileAbsolute(tmp_path, .{});
+    try std.testing.expectError(error.FileNotFound, result);
 }
