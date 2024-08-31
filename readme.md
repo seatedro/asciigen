@@ -57,7 +57,7 @@ run the program with the following options (the default zig install directory is
    with brightness boost and url input:
    ```bash
    # bonus (this is a sweet wallpaper)
-   asciigen -i "https://w.wallhaven.cc/full/p9/wallhaven-p9gr2p.jpg" -o output.png -c -e -b 1.5
+   asciigen -i "https://w.wallhaven.cc/full/p9/wallhaven-p9gr2p.jpg" -o output.png -e -c-b 1.5
    ```
 
 3. the program will generate an ascii art version of your input image and save it as a new image file.
