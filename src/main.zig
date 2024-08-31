@@ -149,6 +149,7 @@ const Args = struct {
     input: []const u8,
     output: []const u8,
     color: bool,
+    invert_color: bool,
     scale: f32,
     detect_edges: bool,
     sigma1: f32,
@@ -174,10 +175,11 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         \\-i, --input <str>     Input image file
         \\-o, --output <str>    Output image file
         \\-c, --color           Use color ASCII characters
-        \\-s, --scale <f32>      Scale factor (default: 8)
+        \\-n, --invert_color    Inverts the color values
+        \\-s, --scale <f32>     Scale factor (default: 8)
         \\-e, --detect_edges    Detect edges
-        \\    --sigma1 <f32>   Sigma 1 for DoG filter (default: 0.5)
-        \\    --sigma2 <f32>   Sigma 2 for DoG filter (default: 1.0)
+        \\    --sigma1 <f32>    Sigma 1 for DoG filter (default: 0.5)
+        \\    --sigma2 <f32>    Sigma 2 for DoG filter (default: 1.0)
         \\-b, --brightness_boost <f32>   Brightness boost (default: 1.0)
     );
 
@@ -211,6 +213,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
             break :blk std.fs.path.join(allocator, &.{ current_dir, output_filename }) catch unreachable;
         },
         .color = res.args.color != 0,
+        .invert_color = res.args.invert_color != 0,
         .scale = res.args.scale orelse 1.0,
         .detect_edges = res.args.detect_edges != 0,
         .sigma1 = res.args.sigma1 orelse 0.5,
@@ -698,11 +701,19 @@ fn selectAsciiChar(block_info: BlockInfo, args: Args) u8 {
 
 fn calculateAverageColor(block_info: BlockInfo, args: Args) [3]u8 {
     if (args.color) {
-        return .{
+        var color = [3]u8{
             @intCast(block_info.sum_color[0] / block_info.pixel_count),
             @intCast(block_info.sum_color[1] / block_info.pixel_count),
             @intCast(block_info.sum_color[2] / block_info.pixel_count),
         };
+
+        if (args.invert_color) {
+            color[0] = 255 - color[0];
+            color[1] = 255 - color[1];
+            color[2] = 255 - color[2];
+        }
+
+        return color;
     } else {
         return .{ 255, 255, 255 };
     }
