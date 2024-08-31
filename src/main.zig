@@ -149,7 +149,7 @@ const Args = struct {
     input: []const u8,
     output: []const u8,
     color: bool,
-    scale: u8,
+    scale: f32,
     detect_edges: bool,
     sigma1: f32,
     sigma2: f32,
@@ -174,7 +174,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         \\-i, --input <str>     Input image file
         \\-o, --output <str>    Output image file
         \\-c, --color           Use color ASCII characters
-        \\-s, --scale <u8>      Scale factor (default: 8)
+        \\-s, --scale <f32>      Scale factor (default: 8)
         \\-e, --detect_edges    Detect edges
         \\    --sigma1 <f32>   Sigma 1 for DoG filter (default: 0.5)
         \\    --sigma2 <f32>   Sigma 2 for DoG filter (default: 1.0)
@@ -211,7 +211,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
             break :blk std.fs.path.join(allocator, &.{ current_dir, output_filename }) catch unreachable;
         },
         .color = res.args.color != 0,
-        .scale = res.args.scale orelse 1,
+        .scale = res.args.scale orelse 1.0,
         .detect_edges = res.args.detect_edges != 0,
         .sigma1 = res.args.sigma1 orelse 0.5,
         .sigma2 = res.args.sigma2 orelse 1.0,
@@ -524,9 +524,9 @@ pub fn main() !void {
     defer stb.stbi_image_free(original_img.data);
 
     var img: Image = undefined;
-    if (args.scale != 1) {
-        const img_w = original_img.width / args.scale;
-        const img_h = original_img.height / args.scale;
+    if (args.scale != 1.0 and args.scale > 0.0) {
+        const img_w = @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(original_img.width)) / args.scale)));
+        const img_h = @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(original_img.height)) / args.scale)));
 
         const downscaled_img = stb.stbir_resize_uint8_linear(
             original_img.data,
@@ -577,7 +577,7 @@ pub fn main() !void {
     } else {
         img = original_img;
     }
-    defer if (args.scale != 1) stb.stbi_image_free(img.data);
+    defer if (args.scale != 1.0) stb.stbi_image_free(img.data);
 
     var grayscale_img: []u8 = undefined;
     var edge_result: SobelFilter = undefined;
