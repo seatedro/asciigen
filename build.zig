@@ -18,8 +18,43 @@ pub fn build(b: *std.Build) !void {
         }
     } else {
         const target = b.standardTargetOptionsQueryOnly(.{});
-        try runZig(b, dep_stb, target, optimize);
+        try runZig(b, target, optimize, dep_stb);
     }
+}
+
+fn setupExecutable(
+    b: *std.Build,
+    name: []const u8,
+    target: std.Target.Query,
+    optimize: std.builtin.OptimizeMode,
+    dep_stb: *std.Build.Dependency,
+    link_libc: bool,
+) !*std.Build.Step.Compile {
+    const exe = b.addExecutable(.{
+        .name = name,
+        .root_source_file = b.path("src/main.zig"),
+        .target = b.resolveTargetQuery(target),
+        .optimize = optimize,
+        .link_libc = link_libc,
+    });
+
+    const clap = b.dependency("clap", .{});
+    exe.root_module.addImport("clap", clap.module("clap"));
+
+    linkFfmpeg(exe);
+
+    exe.addCSourceFile(.{ .file = b.path("stb/stb.c") });
+    exe.addIncludePath(dep_stb.path(""));
+
+    return exe;
+}
+
+fn linkFfmpeg(exe: *std.Build.Step.Compile) void {
+    exe.linkSystemLibrary2("libavformat", .{ .use_pkg_config = .force });
+    exe.linkSystemLibrary2("libavcodec", .{ .use_pkg_config = .force });
+    exe.linkSystemLibrary2("libavutil", .{ .use_pkg_config = .force });
+    exe.linkSystemLibrary2("libswscale", .{ .use_pkg_config = .force });
+    exe.linkSystemLibrary2("libswresample", .{ .use_pkg_config = .force });
 }
 
 fn buildCi(
@@ -28,13 +63,7 @@ fn buildCi(
     optimize: std.builtin.OptimizeMode,
     dep_stb: *std.Build.Dependency,
 ) !void {
-    const exe = b.addExecutable(.{
-        .name = "asciigen",
-        .root_source_file = b.path("src/main.zig"),
-        .target = b.resolveTargetQuery(target),
-        .optimize = optimize,
-        .link_libc = true,
-    });
+    const exe = try setupExecutable(b, "asciigen", target, optimize, dep_stb, true);
 
     const target_output = b.addInstallArtifact(exe, .{
         .dest_dir = .{
@@ -45,43 +74,31 @@ fn buildCi(
     });
 
     b.getInstallStep().dependOn(&target_output.step);
-
-    const clap = b.dependency("clap", .{});
-    exe.root_module.addImport("clap", clap.module("clap"));
-
-    exe.addCSourceFile(.{ .file = b.path("stb/stb.c") });
-    exe.addIncludePath(dep_stb.path(""));
 }
 
 fn runZig(
     b: *std.Build,
-    dep_stb: *std.Build.Dependency,
     target: std.Target.Query,
     optimize: std.builtin.OptimizeMode,
+    dep_stb: *std.Build.Dependency,
 ) !void {
-    const exe = b.addExecutable(.{
-        .name = "asciigen",
-        .root_source_file = b.path("src/main.zig"),
-        .target = b.resolveTargetQuery(target),
-        .optimize = optimize,
-        .link_libc = true,
-    });
+    const exe = try setupExecutable(
+        b,
+        "asciigen",
+        target,
+        optimize,
+        dep_stb,
+        true,
+    );
 
-    const clap = b.dependency("clap", .{});
-    exe.root_module.addImport("clap", clap.module("clap"));
-
-    exe.addCSourceFile(.{ .file = b.path("stb/stb.c") });
-    exe.addIncludePath(dep_stb.path(""));
-
-    const exe_check = b.addExecutable(.{
-        .name = "asciigen-check",
-        .root_source_file = b.path("src/main.zig"),
-        .target = b.resolveTargetQuery(target),
-        .optimize = optimize,
-    });
-    exe_check.root_module.addImport("clap", clap.module("clap"));
-    exe_check.addCSourceFile(.{ .file = b.path("stb/stb.c") });
-    exe_check.addIncludePath(dep_stb.path(""));
+    const exe_check = try setupExecutable(
+        b,
+        "asciigen-check",
+        target,
+        optimize,
+        dep_stb,
+        false,
+    );
     const check_step = b.step("check", "Run the check");
     check_step.dependOn(&exe_check.step);
 
@@ -102,6 +119,7 @@ fn runZig(
         .optimize = optimize,
         .link_libc = true,
     });
+    linkFfmpeg(unit_tests);
     unit_tests.addCSourceFile(.{ .file = b.path("stb/stb.c") });
     unit_tests.addIncludePath(dep_stb.path(""));
     const run_unit_tests = b.addRunArtifact(unit_tests);
