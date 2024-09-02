@@ -72,4 +72,4 @@ output file needs to be a `.png` since i saw some weird issues with jpegs.
 
 the zig version is the only one i'll be working on from here on. the c code was just to get me started until i figured out some issues with the build.zig
 
-4. Using the long agruments on windows may or may not work. Please use the short agruments for now.
+4. Using the long arguments on windows may or may not work. Please use the short arguments for now.
