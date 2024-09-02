@@ -8,9 +8,9 @@ const stb = @cImport({
 });
 
 // VARS
-const ASCII_CHARS = " .:-=+*%#@"; // low to high brightness
-const CHAR_SIZE = 8;
-const THRESHOLD = 50;
+//const ascii_chars = " .:-=+*%#@"; // low to high brightness
+//const char_size = 8;
+//const threshold = 50;
 
 /// Author: Daniel Hepper <daniel@hepper.net>
 /// URL: https://github.com/dhepper/font8x8
@@ -155,6 +155,10 @@ const Args = struct {
     sigma1: f32,
     sigma2: f32,
     brightness_boost: f32,
+    full_characters: bool,
+    ascii_chars: []const u8,
+    char_size: u8,
+    threshold_disabled: bool,
 };
 
 const Image = struct {
@@ -178,9 +182,13 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         \\-n, --invert_color    Inverts the color values
         \\-s, --scale <f32>     Scale factor (default: 8)
         \\-e, --detect_edges    Detect edges
-        \\    --sigma1 <f32>    Sigma 1 for DoG filter (default: 0.5)
-        \\    --sigma2 <f32>    Sigma 2 for DoG filter (default: 1.0)
+        \\-l, --sigma1 <f32>    Sigma 1 for DoG filter (default: 0.5)
+        \\-m, --sigma2 <f32>    Sigma 2 for DoG filter (default: 1.0)
         \\-b, --brightness_boost <f32>   Brightness boost (default: 1.0)
+        \\-f, --full_characters          Uses full spectrum of characters in image.
+        \\-r, --ascii_chars <str>        Use what characters you want to use in the image. (default: " .:-=+*%#@")
+        \\-a, --char_size <u8>           Set the size of the characters. (default: 8)
+        \\-t, --threshold_disabled       Disables the threshold.
     );
 
     var diag = clap.Diagnostic{};
@@ -219,6 +227,16 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         .sigma1 = res.args.sigma1 orelse 0.5,
         .sigma2 = res.args.sigma2 orelse 1.0,
         .brightness_boost = res.args.brightness_boost orelse 1.0,
+        .full_characters = res.args.full_characters != 0,
+        .ascii_chars = if (res.args.ascii_chars) |custom_chars| custom_chars else blk: {
+            if (res.args.full_characters != 0) {
+                break :blk " .:-=+*%#@1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+            } else {
+                break :blk " .:-=+*%#@";
+            }
+        },
+        .char_size = res.args.char_size orelse 8,
+        .threshold_disabled = res.args.threshold_disabled != 0,
     };
 }
 
@@ -454,8 +472,9 @@ fn applySobelFilter(allocator: std.mem.Allocator, img: Image) !SobelFilter {
     };
 }
 
-fn getEdgeChar(mag: f32, dir: f32) ?u8 {
-    if (mag < THRESHOLD) {
+fn getEdgeChar(mag: f32, dir: f32, threshold_disabled: bool) ?u8 {
+    const threshold: f32 = 50;
+    if (mag < threshold and !threshold_disabled) {
         return null;
     }
 
@@ -477,6 +496,7 @@ fn convertToAscii(
     y: usize,
     ascii_char: u8,
     color: [3]u8,
+    char_size: u8,
 ) void {
     if (ascii_char < 32 or ascii_char > 126) {
         // std.debug.print("Error: invalid ASCII character: {}\n", .{ascii_char});
@@ -484,8 +504,8 @@ fn convertToAscii(
     }
 
     const bitmap = &font_bitmap[ascii_char];
-    const block_w = @min(CHAR_SIZE, w - x);
-    const block_h = @min(CHAR_SIZE, img.len / (w * 3) - y);
+    const block_w = @min(char_size, w - x);
+    const block_h = @min(char_size, img.len / (w * 3) - y);
     var dy: usize = 0;
     while (dy < block_h) : (dy += 1) {
         var dx: usize = 0;
@@ -616,21 +636,21 @@ fn generateAsciiArt(
     edge_result: EdgeData,
     args: Args,
 ) ![]u8 {
-    const out_w = (img.width / CHAR_SIZE) * CHAR_SIZE;
-    const out_h = (img.height / CHAR_SIZE) * CHAR_SIZE;
+    const out_w = (img.width / args.char_size) * args.char_size;
+    const out_h = (img.height / args.char_size) * args.char_size;
 
     const ascii_img = try allocator.alloc(u8, out_w * out_h * 3);
     @memset(ascii_img, 0);
 
     var y: usize = 0;
-    while (y < out_h) : (y += CHAR_SIZE) {
+    while (y < out_h) : (y += args.char_size) {
         var x: usize = 0;
-        while (x < out_w) : (x += CHAR_SIZE) {
+        while (x < out_w) : (x += args.char_size) {
             const block_info = calculateBlockInfo(img, edge_result, x, y, out_w, out_h, args);
             const ascii_char = selectAsciiChar(block_info, args);
             const avg_color = calculateAverageColor(block_info, args);
 
-            convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color);
+            convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color, args.char_size);
         }
     }
 
@@ -647,8 +667,8 @@ const BlockInfo = struct {
 fn calculateBlockInfo(img: Image, edge_result: EdgeData, x: usize, y: usize, out_w: usize, out_h: usize, args: Args) BlockInfo {
     var info = BlockInfo{ .sum_brightness = 0, .sum_color = .{ 0, 0, 0 }, .pixel_count = 0, .sum_mag = 0, .sum_dir = 0 };
 
-    const block_w = @min(CHAR_SIZE, out_w - x);
-    const block_h = @min(CHAR_SIZE, out_h - y);
+    const block_w = @min(args.char_size, out_w - x);
+    const block_h = @min(args.char_size, out_h - y);
 
     for (0..block_h) |dy| {
         for (0..block_w) |dx| {
@@ -691,12 +711,12 @@ fn selectAsciiChar(block_info: BlockInfo, args: Args) u8 {
     if (args.detect_edges) {
         const avg_mag: f32 = block_info.sum_mag / @as(f32, @floatFromInt(block_info.pixel_count));
         const avg_dir: f32 = block_info.sum_dir / @as(f32, @floatFromInt(block_info.pixel_count));
-        if (getEdgeChar(avg_mag, avg_dir)) |ec| {
+        if (getEdgeChar(avg_mag, avg_dir, args.threshold_disabled)) |ec| {
             return ec;
         }
     }
 
-    return if (clamped_brightness == 0) ' ' else ASCII_CHARS[(clamped_brightness * ASCII_CHARS.len) / 256];
+    return if (clamped_brightness == 0) ' ' else args.ascii_chars[(clamped_brightness * args.ascii_chars.len) / 256];
 }
 
 fn calculateAverageColor(block_info: BlockInfo, args: Args) [3]u8 {
@@ -720,8 +740,8 @@ fn calculateAverageColor(block_info: BlockInfo, args: Args) [3]u8 {
 }
 
 fn saveOutputImage(ascii_img: []u8, img: Image, args: Args) !void {
-    const out_w = (img.width / CHAR_SIZE) * CHAR_SIZE;
-    const out_h = (img.height / CHAR_SIZE) * CHAR_SIZE;
+    const out_w = (img.width / args.char_size) * args.char_size;
+    const out_h = (img.height / args.char_size) * args.char_size;
 
     const save_result = stb.stbi_write_png(
         @ptrCast(args.output.ptr),
