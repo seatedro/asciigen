@@ -34,9 +34,13 @@ run the program with the following options (the default zig install directory is
    - `-n, --invert_color`: Inverts the color values (optional)
    - `-s, --scale <float>`: set the downscale or upscale factor (optional, default: 1)
    - `-e, --detect_edges`: enable edge detection (optional)
-   - `--sigma1 <float>`: set the sigma1 value for DoG filter (optional, default: 0.3)
-   - `--sigma2 <float>`: set the sigma2 value for DoG filter (optional, default: 1.0)
+   - `-l, --sigma1 <float>`: set the sigma1 value for DoG filter (optional, default: 0.3)
+   - `-m, --sigma2 <float>`: set the sigma2 value for DoG filter (optional, default: 1.0)
    - `-b, --brightness_boost <float>`: increase/decrease perceived brightness (optional, default: 1.0)
+   - `-f, --full_characters`: Uses full spectrum of characters in image.
+   - `-r, --ascii_chars <string>`: Use what characters you want to use in the image. (default: " .:-=+*%#@")
+   - `-a, --char_size <u8>`: Set the size of the characters. (default: 8)
+   - `-t, --threshold_disabled`: Disables the threshold.
 
 2. examples:
 

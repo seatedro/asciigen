@@ -780,6 +780,10 @@ test "test_ascii_generation" {
         .sigma1 = 0.5,
         .sigma2 = 1.0,
         .brightness_boost = 1.0,
+        .full_characters = false,
+        .ascii_chars = null, //uses default (" .:-=+*%#@")
+        .char_size = 8,
+        .threshold_disabled = false,
     };
 
     // Run the main function with test arguments
