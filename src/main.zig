@@ -157,6 +157,7 @@ const Args = struct {
     brightness_boost: f32,
     full_characters: bool,
     ascii_chars: []const u8,
+    sorted_ovr: bool,
     char_size: u8,
     threshold_disabled: bool,
 };
@@ -187,6 +188,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         \\-b, --brightness_boost <f32>   Brightness boost (default: 1.0)
         \\-f, --full_characters          Uses full spectrum of characters in image.
         \\-r, --ascii_chars <str>        Use what characters you want to use in the image. (default: " .:-=+*%#@")
+        \\-d, --sorted_ovr               Prevents sorting of the ascii_chars by size.
         \\-a, --char_size <u8>           Set the size of the characters. (default: 8)
         \\-t, --threshold_disabled       Disables the threshold.
     );
@@ -228,18 +230,76 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         .sigma2 = res.args.sigma2 orelse 1.0,
         .brightness_boost = res.args.brightness_boost orelse 1.0,
         .full_characters = res.args.full_characters != 0,
-        .ascii_chars = if (res.args.ascii_chars) |custom_chars| custom_chars else blk: {
-            if (res.args.full_characters != 0) {
-                break :blk " .:-=+*%#@1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        .ascii_chars = if (res.args.ascii_chars) |custom_chars| blk: {
+            if (res.args.sorted_ovr != 0) {
+                break :blk custom_chars;
             } else {
-                break :blk " .:-=+*%#@";
+                if (sortCharsBySize(allocator, custom_chars)) |sorted_chars| {
+                    break :blk sorted_chars;
+                } else |_| {
+                    //_ = err;
+                    //std.debug.print("Error sorting custom chars: {}\n", .{err});
+                    // Handle the error or provide a default value
+
+                    break :blk " .:-=+*%@#";
+                }
+            }
+        } else blk: {
+            if (res.args.full_characters != 0) {
+                break :blk " .-:=+iltIcsv1x%7aejorzfnuCJT3*69LYpqy25SbdgFGOVXkPhmw48AQDEHKUZR@B#NW0M";
+            } else {
+                break :blk " .:-=+*%@#";
             }
         },
+        .sorted_ovr = res.args.sorted_ovr != 0,
         .char_size = res.args.char_size orelse 8,
         .threshold_disabled = res.args.threshold_disabled != 0,
     };
 }
 
+fn sortCharsBySize(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
+    const CharInfo = struct {
+        char: u8,
+        size: usize,
+    };
+
+    var char_infos = std.ArrayList(CharInfo).init(allocator);
+    defer char_infos.deinit();
+
+    for (input) |char| {
+        if (char >= 128) continue; // Skip non-ASCII characters
+
+        const bitmap = font_bitmap[char];
+        var size: usize = 0;
+
+        for (bitmap) |row| {
+            size += @popCount(row);
+        }
+
+        if (size == 0 and char != ' ') continue; // Skip zero-size characters except space
+
+        try char_infos.append(.{ .char = char, .size = size });
+    }
+
+    // Sort characters by size
+    std.mem.sort(CharInfo, char_infos.items, {}, struct {
+        fn lessThan(_: void, a: CharInfo, b: CharInfo) bool {
+            return a.size < b.size;
+        }
+    }.lessThan);
+
+    // Create the sorted string
+    var result = try allocator.alloc(u8, char_infos.items.len);
+    for (char_infos.items, 0..) |char_info, i| {
+        result[i] = char_info.char;
+    }
+
+    // Print the sorted string
+    //std.debug.print("Sorted string: {s}\n", .{result});
+
+    // Convert []u8 to []const u8 before returning
+    return result[0..];
+}
 fn downloadImage(allocator: std.mem.Allocator, url: []const u8) ![]u8 {
     var client = std.http.Client{ .allocator = allocator };
     defer client.deinit();
@@ -781,7 +841,8 @@ test "test_ascii_generation" {
         .sigma2 = 1.0,
         .brightness_boost = 1.0,
         .full_characters = false,
-        .ascii_chars = null, //uses default (" .:-=+*%#@")
+        .ascii_chars = null, //uses default (" .:-=+*%@#")
+        .sorted_ovr = false,
         .char_size = 8,
         .threshold_disabled = false,
     };

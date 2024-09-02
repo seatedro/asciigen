@@ -39,6 +39,7 @@ run the program with the following options (the default zig install directory is
    - `-b, --brightness_boost <float>`: increase/decrease perceived brightness (optional, default: 1.0)
    - `-f, --full_characters`: Uses full spectrum of characters in image.
    - `-r, --ascii_chars <string>`: Use what characters you want to use in the image. (default: " .:-=+*%#@")
+   - `-d, --sorted_ovr`: Prevents sorting of the ascii_chars by size.
    - `-a, --char_size <u8>`: Set the size of the characters. (default: 8)
    - `-t, --threshold_disabled`: Disables the threshold.
 
