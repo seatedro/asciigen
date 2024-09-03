@@ -1,5 +1,6 @@
 const std = @import("std");
 const clap = @import("clap");
+const mime = @import("mime.zig");
 // const stb = @import("stb");
 const stb = @cImport({
     @cInclude("stb_image.h");
@@ -310,23 +311,22 @@ fn sortCharsBySize(allocator: std.mem.Allocator, input: []const u8) ![]const u8 
 // -----------------------
 
 fn isVideoFile(file_path: []const u8) bool {
-    var fmt_ctx: ?*av.AVFormatContext = null;
-    defer if (fmt_ctx != null) av.avformat_close_input(&fmt_ctx);
-
-    if (av.avformat_open_input(&fmt_ctx, file_path.ptr, null, null) < 0) {
-        return false;
+    const extension = std.fs.path.extension(file_path);
+    if (mime.extension_map.get(extension)) |mime_type| {
+        return switch (mime_type) {
+            .@"video/3gpp",
+            .@"video/3gpp2",
+            .@"video/mp2t",
+            .@"video/mp4",
+            .@"video/mpeg",
+            .@"video/ogg",
+            .@"video/quicktime",
+            .@"video/webm",
+            .@"video/x-msvideo",
+            => true,
+            else => false,
+        };
     }
-
-    if (av.avformat_find_stream_info(fmt_ctx, null) < 0) {
-        return false;
-    }
-
-    for (0..fmt_ctx.?.nb_streams) |i| {
-        if (fmt_ctx.?.streams[i].*.codecpar.*.codec_type == av.AVMEDIA_TYPE_VIDEO) {
-            return true;
-        }
-    }
-
     return false;
 }
 
@@ -972,10 +972,8 @@ pub fn main() !void {
     const args = try parseArgs(allocator);
 
     if (isVideoFile(args.input)) {
-        std.debug.print("----------DETECTED INPUT VIDEO----------", .{});
         try processVideo(allocator, args);
     } else {
-        std.debug.print("----------DETECTED INPUT IMAGE----------", .{});
         try processImage(allocator, args);
     }
 }
