@@ -181,14 +181,14 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         \\-n, --invert_color    Inverts the color values
         \\-s, --scale <f32>     Scale factor (default: 8)
         \\-e, --detect_edges    Detect edges
-        \\-l, --sigma1 <f32>    Sigma 1 for DoG filter (default: 0.5)
-        \\-m, --sigma2 <f32>    Sigma 2 for DoG filter (default: 1.0)
+        \\    --sigma1 <f32>    Sigma 1 for DoG filter (default: 0.5)
+        \\    --sigma2 <f32>    Sigma 2 for DoG filter (default: 1.0)
         \\-b, --brightness_boost <f32>   Brightness boost (default: 1.0)
-        \\-f, --full_characters          Uses full spectrum of characters in image.
-        \\-r, --ascii_chars <str>        Use what characters you want to use in the image. (default: " .:-=+*%#@")
-        \\-d, --sorted_ovr               Prevents sorting of the ascii_chars by size.
-        \\-a, --char_size <u8>           Set the size of the characters. (default: 8)
-        \\-t, --threshold_disabled       Disables the threshold.
+        \\    --full_characters          Uses full spectrum of characters in image.
+        \\    --ascii_chars <str>        Use what characters you want to use in the image. (default: " .:-=+*%#@")
+        \\    --sorted_ovr               Prevents sorting of the ascii_chars by size.
+        \\    --char_size <u8>           Set the size of the characters. (default: 8)
+        \\    --threshold_disabled       Disables the threshold.
     );
 
     var diag = clap.Diagnostic{};
