@@ -155,8 +155,8 @@ const Args = struct {
     brightness_boost: f32,
     full_characters: bool,
     ascii_chars: []const u8,
-    sorted_ovr: bool,
-    char_size: u8,
+    disable_sort: bool,
+    block_size: u8,
     threshold_disabled: bool,
 };
 
@@ -186,8 +186,8 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         \\-b, --brightness_boost <f32>   Brightness boost (default: 1.0)
         \\    --full_characters          Uses full spectrum of characters in image.
         \\    --ascii_chars <str>        Use what characters you want to use in the image. (default: " .:-=+*%#@")
-        \\    --sorted_ovr               Prevents sorting of the ascii_chars by size.
-        \\    --char_size <u8>           Set the size of the characters. (default: 8)
+        \\    --disable_sort             Prevents sorting of the ascii_chars by size.
+        \\    --block_size <u8>          Set the size of the blocks. (default: 8)
         \\    --threshold_disabled       Disables the threshold.
     );
 
@@ -229,7 +229,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         .brightness_boost = res.args.brightness_boost orelse 1.0,
         .full_characters = res.args.full_characters != 0,
         .ascii_chars = if (res.args.ascii_chars) |custom_chars| blk: {
-            if (res.args.sorted_ovr != 0) {
+            if (res.args.disable_sort != 0) {
                 break :blk custom_chars;
             } else {
                 if (sortCharsBySize(allocator, custom_chars)) |sorted_chars| {
@@ -245,8 +245,8 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
                 break :blk default_characters;
             }
         },
-        .sorted_ovr = res.args.sorted_ovr != 0,
-        .char_size = res.args.char_size orelse 8,
+        .disable_sort = res.args.disable_sort != 0,
+        .block_size = res.args.block_size orelse 8,
         .threshold_disabled = res.args.threshold_disabled != 0,
     };
 }
@@ -550,7 +550,7 @@ fn convertToAscii(
     y: usize,
     ascii_char: u8,
     color: [3]u8,
-    char_size: u8,
+    block_size: u8,
 ) void {
     if (ascii_char < 32 or ascii_char > 126) {
         // std.debug.print("Error: invalid ASCII character: {}\n", .{ascii_char});
@@ -558,8 +558,8 @@ fn convertToAscii(
     }
 
     const bitmap = &font_bitmap[ascii_char];
-    const block_w = @min(char_size, w - x);
-    const block_h = @min(char_size, img.len / (w * 3) - y);
+    const block_w = @min(block_size, w - x);
+    const block_h = @min(block_size, img.len / (w * 3) - y);
     var dy: usize = 0;
     while (dy < block_h) : (dy += 1) {
         var dx: usize = 0;
@@ -690,21 +690,21 @@ fn generateAsciiArt(
     edge_result: EdgeData,
     args: Args,
 ) ![]u8 {
-    const out_w = (img.width / args.char_size) * args.char_size;
-    const out_h = (img.height / args.char_size) * args.char_size;
+    const out_w = (img.width / args.block_size) * args.block_size;
+    const out_h = (img.height / args.block_size) * args.block_size;
 
     const ascii_img = try allocator.alloc(u8, out_w * out_h * 3);
     @memset(ascii_img, 0);
 
     var y: usize = 0;
-    while (y < out_h) : (y += args.char_size) {
+    while (y < out_h) : (y += args.block_size) {
         var x: usize = 0;
-        while (x < out_w) : (x += args.char_size) {
+        while (x < out_w) : (x += args.block_size) {
             const block_info = calculateBlockInfo(img, edge_result, x, y, out_w, out_h, args);
             const ascii_char = selectAsciiChar(block_info, args);
             const avg_color = calculateAverageColor(block_info, args);
 
-            convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color, args.char_size);
+            convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color, args.block_size);
         }
     }
 
@@ -721,8 +721,8 @@ const BlockInfo = struct {
 fn calculateBlockInfo(img: Image, edge_result: EdgeData, x: usize, y: usize, out_w: usize, out_h: usize, args: Args) BlockInfo {
     var info = BlockInfo{ .sum_brightness = 0, .sum_color = .{ 0, 0, 0 }, .pixel_count = 0, .sum_mag = 0, .sum_dir = 0 };
 
-    const block_w = @min(args.char_size, out_w - x);
-    const block_h = @min(args.char_size, out_h - y);
+    const block_w = @min(args.block_size, out_w - x);
+    const block_h = @min(args.block_size, out_h - y);
 
     for (0..block_h) |dy| {
         for (0..block_w) |dx| {
@@ -794,8 +794,8 @@ fn calculateAverageColor(block_info: BlockInfo, args: Args) [3]u8 {
 }
 
 fn saveOutputImage(ascii_img: []u8, img: Image, args: Args) !void {
-    const out_w = (img.width / args.char_size) * args.char_size;
-    const out_h = (img.height / args.char_size) * args.char_size;
+    const out_w = (img.width / args.block_size) * args.block_size;
+    const out_h = (img.height / args.block_size) * args.block_size;
 
     const save_result = stb.stbi_write_png(
         @ptrCast(args.output.ptr),
@@ -836,8 +836,8 @@ test "test_ascii_generation" {
         .brightness_boost = 1.0,
         .full_characters = false,
         .ascii_chars = null, //uses default (" .:-=+*%@#")
-        .sorted_ovr = false,
-        .char_size = 8,
+        .disable_sort = false,
+        .block_size = 8,
         .threshold_disabled = false,
     };
 
