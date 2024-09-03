@@ -170,6 +170,7 @@ const Args = struct {
     disable_sort: bool,
     block_size: u8,
     threshold_disabled: bool,
+    codec: ?[]const u8,
 };
 
 const Image = struct {
@@ -186,21 +187,22 @@ const SobelFilter = struct {
 
 fn parseArgs(allocator: std.mem.Allocator) !Args {
     const params = comptime clap.parseParamsComptime(
-        \\-h, --help            Print this help message and exit
-        \\-i, --input <str>     Input image file
-        \\-o, --output <str>    Output image file
-        \\-c, --color           Use color ASCII characters
-        \\-n, --invert_color    Inverts the color values
-        \\-s, --scale <f32>     Scale factor (default: 8)
-        \\-e, --detect_edges    Detect edges
-        \\    --sigma1 <f32>    Sigma 1 for DoG filter (default: 0.5)
-        \\    --sigma2 <f32>    Sigma 2 for DoG filter (default: 1.0)
+        \\-h, --help                     Print this help message and exit
+        \\-i, --input <str>              Input image file
+        \\-o, --output <str>             Output image file
+        \\-c, --color                    Use color ASCII characters
+        \\-n, --invert_color             Inverts the color values
+        \\-s, --scale <f32>              Scale factor (default: 8)
+        \\-e, --detect_edges             Detect edges
+        \\    --sigma1 <f32>             Sigma 1 for DoG filter (default: 0.5)
+        \\    --sigma2 <f32>             Sigma 2 for DoG filter (default: 1.0)
         \\-b, --brightness_boost <f32>   Brightness boost (default: 1.0)
         \\    --full_characters          Uses full spectrum of characters in image.
         \\    --ascii_chars <str>        Use what characters you want to use in the image. (default: " .:-=+*%#@")
         \\    --disable_sort             Prevents sorting of the ascii_chars by size.
         \\    --block_size <u8>          Set the size of the blocks. (default: 8)
         \\    --threshold_disabled       Disables the threshold.
+        \\    --codec <str>              Encoder Codec like "libx264" or "hevc_videotoolbox" (optional)
     );
 
     var diag = clap.Diagnostic{};
@@ -260,6 +262,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         .disable_sort = res.args.disable_sort != 0,
         .block_size = res.args.block_size orelse 8,
         .threshold_disabled = res.args.threshold_disabled != 0,
+        .codec = res.args.codec,
     };
 }
 
@@ -396,10 +399,11 @@ fn createDecoder(stream: *av.AVStream) !*av.AVCodecContext {
     return codex_ctx;
 }
 
-fn createEncoder(codec_ctx: *av.AVCodecContext, stream: *av.AVStream) !*av.AVCodecContext {
-    const encoder = av.avcodec_find_encoder_by_name("h264_nvenc") orelse
+fn createEncoder(codec_ctx: *av.AVCodecContext, stream: *av.AVStream, args: Args) !*av.AVCodecContext {
+    const encoder = if (args.codec) |codec| av.avcodec_find_encoder_by_name(codec.ptr) else av.avcodec_find_encoder_by_name("h264_nvenc") orelse
         av.avcodec_find_encoder_by_name("hevc_amf") orelse
         av.avcodec_find_encoder_by_name("hevc_qsv") orelse
+        av.avcodec_find_encoder_by_name("hevc_videotoolbox") orelse
         av.avcodec_find_encoder_by_name("libx265") orelse
         av.avcodec_find_encoder_by_name("h264_amf") orelse
         av.avcodec_find_encoder_by_name("h264_qsv") orelse
@@ -412,8 +416,6 @@ fn createEncoder(codec_ctx: *av.AVCodecContext, stream: *av.AVStream) !*av.AVCod
     }
 
     // Setting up encoding context
-    // enc_ctx.*.width = @divFloor(codec_ctx.width, CHAR_SIZE) * CHAR_SIZE;
-    // enc_ctx.*.height = @divFloor(codec_ctx.height, CHAR_SIZE) * CHAR_SIZE;
     enc_ctx.*.width = codec_ctx.width;
     enc_ctx.*.height = codec_ctx.height;
     enc_ctx.*.pix_fmt = av.AV_PIX_FMT_YUV420P;
@@ -438,7 +440,7 @@ fn createEncoder(codec_ctx: *av.AVCodecContext, stream: *av.AVStream) !*av.AVCod
         _ = av.av_opt_set(enc_ctx.*.priv_data, "level", "4.2", 0);
     } else {
         _ = av.av_opt_set(enc_ctx.*.priv_data, "rc", "vbr", 0);
-        _ = av.av_opt_set_int(enc_ctx.*.priv_data, "cq", 23, 0);
+        _ = av.av_opt_set_int(enc_ctx.*.priv_data, "q", 65, 0);
     }
 
     if (av.avcodec_open2(enc_ctx, encoder, null) < 0) {
@@ -486,7 +488,7 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
     var dec_ctx = try createDecoder(stream_info.stream);
     defer av.avcodec_free_context(@ptrCast(&dec_ctx));
 
-    var enc_ctx = try createEncoder(dec_ctx, stream_info.stream);
+    var enc_ctx = try createEncoder(dec_ctx, stream_info.stream, args);
     defer av.avcodec_free_context(@ptrCast(&enc_ctx));
 
     var output = try createOutputCtx(args.output, enc_ctx);
@@ -508,8 +510,8 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
     defer av.av_frame_free(&rgb_frame);
 
     rgb_frame.*.format = av.AV_PIX_FMT_RGB24;
-    rgb_frame.*.width = @divFloor(dec_ctx.*.width, CHAR_SIZE) * CHAR_SIZE;
-    rgb_frame.*.height = @divFloor(dec_ctx.*.height, CHAR_SIZE) * CHAR_SIZE;
+    rgb_frame.*.width = @divFloor(dec_ctx.*.width, args.block_size) * args.block_size;
+    rgb_frame.*.height = @divFloor(dec_ctx.*.height, args.block_size) * args.block_size;
     if (av.av_frame_get_buffer(rgb_frame, 32) < 0) {
         return error.FailedToAllocFrameBuf;
     }
@@ -641,8 +643,8 @@ fn convertFrameToAscii(allocator: std.mem.Allocator, frame: *av.AVFrame, args: A
     defer allocator.free(ascii_img);
 
     // Copy ascii art back to frame
-    const out_w = (img.width / CHAR_SIZE) * CHAR_SIZE;
-    const out_h = (img.height / CHAR_SIZE) * CHAR_SIZE;
+    const out_w = (img.width / args.block_size) * args.block_size;
+    const out_h = (img.height / args.block_size) * args.block_size;
     const frame_linesize = @as(usize, @intCast(frame.linesize[0]));
 
     for (0..out_h) |y| {
