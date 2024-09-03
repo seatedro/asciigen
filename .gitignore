@@ -17,6 +17,8 @@ zig-out/
 /build-*/
 /docgen_tmp/
 images/
+videos/
+bin/
 **/*.DS_Store
 test_output/
 
