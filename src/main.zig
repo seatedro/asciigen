@@ -11,6 +11,7 @@ const av = @cImport({
     @cInclude("libavcodec/avcodec.h");
     @cInclude("libavutil/avutil.h");
     @cInclude("libavutil/imgutils.h");
+    @cInclude("libavutil/opt.h");
     @cInclude("libswscale/swscale.h");
     @cInclude("libswresample/swresample.h");
     @cInclude("libavutil/channel_layout.h");
@@ -304,6 +305,363 @@ fn sortCharsBySize(allocator: std.mem.Allocator, input: []const u8) ![]const u8 
     // Convert []u8 to []const u8 before returning
     return result[0..];
 }
+// -----------------------
+// VIDEO PROCESSING FUNCTIONS
+// -----------------------
+
+fn isVideoFile(file_path: []const u8) bool {
+    var fmt_ctx: ?*av.AVFormatContext = null;
+    defer if (fmt_ctx != null) av.avformat_close_input(&fmt_ctx);
+
+    if (av.avformat_open_input(&fmt_ctx, file_path.ptr, null, null) < 0) {
+        return false;
+    }
+
+    if (av.avformat_find_stream_info(fmt_ctx, null) < 0) {
+        return false;
+    }
+
+    for (0..fmt_ctx.?.nb_streams) |i| {
+        if (fmt_ctx.?.streams[i].*.codecpar.*.codec_type == av.AVMEDIA_TYPE_VIDEO) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+fn openInputVideo(path: []const u8) !*av.AVFormatContext {
+    var fmt_ctx: ?*av.AVFormatContext = null;
+    if (av.avformat_open_input(
+        &fmt_ctx,
+        path.ptr,
+        null,
+        null,
+    ) < 0) {
+        return error.FailedToOpenInputVideo;
+    }
+    if (av.avformat_find_stream_info(fmt_ctx, null) < 0) {
+        return error.FailedToFindStreamInfo;
+    }
+    return fmt_ctx.?;
+}
+
+const AVStream = struct {
+    stream: *av.AVStream,
+    index: c_int,
+};
+fn openVideoStream(fmt_ctx: *av.AVFormatContext) !AVStream {
+    const index = av.av_find_best_stream(
+        fmt_ctx,
+        av.AVMEDIA_TYPE_VIDEO,
+        -1,
+        -1,
+        null,
+        0,
+    );
+    if (index < 0) {
+        return error.VideoStreamNotFound;
+    }
+
+    return .{
+        .stream = fmt_ctx.streams[@intCast(index)],
+        .index = index,
+    };
+}
+
+fn createDecoder(stream: *av.AVStream) !*av.AVCodecContext {
+    const decoder = av.avcodec_find_decoder(
+        stream.codecpar.*.codec_id,
+    ) orelse {
+        return error.DecoderNotFound;
+    };
+    const codex_ctx = av.avcodec_alloc_context3(decoder);
+    if (codex_ctx == null) {
+        return error.FailedToAllocCodecCtx;
+    }
+    if (av.avcodec_parameters_to_context(
+        codex_ctx,
+        stream.codecpar,
+    ) < 0) {
+        return error.FailedToSetCodecParams;
+    }
+    if (av.avcodec_open2(
+        codex_ctx,
+        decoder,
+        null,
+    ) < 0) {
+        return error.FailedToOpenEncoder;
+    }
+
+    return codex_ctx;
+}
+
+fn createEncoder(codec_ctx: *av.AVCodecContext, stream: *av.AVStream) !*av.AVCodecContext {
+    const encoder = av.avcodec_find_encoder_by_name("h264_nvenc") orelse
+        av.avcodec_find_encoder_by_name("hevc_amf") orelse
+        av.avcodec_find_encoder_by_name("hevc_qsv") orelse
+        av.avcodec_find_encoder_by_name("libx265") orelse
+        av.avcodec_find_encoder_by_name("h264_amf") orelse
+        av.avcodec_find_encoder_by_name("h264_qsv") orelse
+        av.avcodec_find_encoder_by_name("libx264") orelse
+        return error.EncoderNotFound;
+
+    const enc_ctx = av.avcodec_alloc_context3(encoder);
+    if (enc_ctx == null) {
+        return error.FailedToAllocCodecCtx;
+    }
+
+    // Setting up encoding context
+    // enc_ctx.*.width = @divFloor(codec_ctx.width, CHAR_SIZE) * CHAR_SIZE;
+    // enc_ctx.*.height = @divFloor(codec_ctx.height, CHAR_SIZE) * CHAR_SIZE;
+    enc_ctx.*.width = codec_ctx.width;
+    enc_ctx.*.height = codec_ctx.height;
+    enc_ctx.*.pix_fmt = av.AV_PIX_FMT_YUV420P;
+    // enc_ctx.*.pix_fmt = encoder.*.pix_fmts[0];
+    enc_ctx.*.time_base = stream.time_base;
+    enc_ctx.*.framerate = .{
+        .num = codec_ctx.framerate.num,
+        .den = 1,
+    };
+    enc_ctx.*.gop_size = 10;
+    enc_ctx.*.max_b_frames = 1;
+    enc_ctx.*.flags |= av.AV_CODEC_FLAG_GLOBAL_HEADER;
+
+    // Ensure the stride is aligned to 32 bytes
+    const stride = (enc_ctx.*.width + 31) & ~@as(c_int, 31);
+    _ = av.av_opt_set(enc_ctx, "stride", stride, 0);
+
+    if (encoder.*.id == av.AV_CODEC_ID_H264) {
+        _ = av.av_opt_set(enc_ctx.*.priv_data, "preset", "fast", 0);
+        _ = av.av_opt_set(enc_ctx.*.priv_data, "crf", "23", 0);
+        _ = av.av_opt_set(enc_ctx.*.priv_data, "profile", "high", 0);
+        _ = av.av_opt_set(enc_ctx.*.priv_data, "level", "4.2", 0);
+    } else {
+        _ = av.av_opt_set(enc_ctx.*.priv_data, "rc", "vbr", 0);
+        _ = av.av_opt_set_int(enc_ctx.*.priv_data, "cq", 23, 0);
+    }
+
+    if (av.avcodec_open2(enc_ctx, encoder, null) < 0) {
+        return error.FailedToOpenEncoder;
+    }
+
+    return enc_ctx;
+}
+
+const OutputContext = struct {
+    ctx: *av.AVFormatContext,
+    stream: *av.AVStream,
+};
+fn createOutputCtx(output_path: []const u8, enc_ctx: *av.AVCodecContext) !OutputContext {
+    var fmt_ctx: ?*av.AVFormatContext = null;
+    if (av.avformat_alloc_output_context2(&fmt_ctx, null, null, output_path.ptr) < 0) {
+        return error.FailedToCreateOutputCtx;
+    }
+
+    const stream = av.avformat_new_stream(fmt_ctx, null);
+    if (stream == null) {
+        return error.FailedToCreateNewStream;
+    }
+
+    if (av.avcodec_parameters_from_context(stream.*.codecpar, enc_ctx) < 0) {
+        return error.FailedToSetCodecParams;
+    }
+
+    if (av.avio_open(&fmt_ctx.?.pb, output_path.ptr, av.AVIO_FLAG_WRITE) < 0) {
+        return error.FailedToOpenOutputFile;
+    }
+
+    if (av.avformat_write_header(fmt_ctx, null) < 0) {
+        return error.FailedToWriteHeader;
+    }
+
+    return .{ .ctx = fmt_ctx.?, .stream = stream };
+}
+
+fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
+    var input_ctx = try openInputVideo(args.input);
+    defer av.avformat_close_input(@ptrCast(&input_ctx));
+
+    const stream_info = try openVideoStream(input_ctx);
+    var dec_ctx = try createDecoder(stream_info.stream);
+    defer av.avcodec_free_context(@ptrCast(&dec_ctx));
+
+    var enc_ctx = try createEncoder(dec_ctx, stream_info.stream);
+    defer av.avcodec_free_context(@ptrCast(&enc_ctx));
+
+    var output = try createOutputCtx(args.output, enc_ctx);
+    defer {
+        _ = av.av_write_trailer(output.ctx);
+        if ((output.ctx.oformat.*.flags & av.AVFMT_NOFILE) == 0) {
+            _ = av.avio_closep(&output.ctx.pb);
+        }
+        av.avformat_free_context(output.ctx);
+    }
+
+    var packet = av.av_packet_alloc();
+    defer av.av_packet_free(&packet);
+
+    var frame = av.av_frame_alloc();
+    defer av.av_frame_free(&frame);
+
+    var rgb_frame = av.av_frame_alloc();
+    defer av.av_frame_free(&rgb_frame);
+
+    rgb_frame.*.format = av.AV_PIX_FMT_RGB24;
+    rgb_frame.*.width = @divFloor(dec_ctx.*.width, CHAR_SIZE) * CHAR_SIZE;
+    rgb_frame.*.height = @divFloor(dec_ctx.*.height, CHAR_SIZE) * CHAR_SIZE;
+    if (av.av_frame_get_buffer(rgb_frame, 32) < 0) {
+        return error.FailedToAllocFrameBuf;
+    }
+
+    var yuv_frame = av.av_frame_alloc();
+    defer av.av_frame_free(&yuv_frame);
+
+    yuv_frame.*.format = av.AV_PIX_FMT_YUV420P;
+    yuv_frame.*.width = enc_ctx.*.width;
+    yuv_frame.*.height = enc_ctx.*.height;
+    if (av.av_frame_get_buffer(yuv_frame, 32) < 0) {
+        return error.FailedToAllocFrameBuf;
+    }
+
+    const sws_ctx = av.sws_getContext(
+        dec_ctx.width,
+        dec_ctx.height,
+        dec_ctx.pix_fmt,
+        rgb_frame.*.width,
+        rgb_frame.*.height,
+        @intCast(rgb_frame.*.format),
+        av.SWS_BILINEAR,
+        null,
+        null,
+        null,
+    );
+    defer av.sws_freeContext(sws_ctx);
+
+    const out_sws_ctx = av.sws_getContext(
+        rgb_frame.*.width,
+        rgb_frame.*.height,
+        @intCast(rgb_frame.*.format),
+        yuv_frame.*.width,
+        yuv_frame.*.height,
+        @intCast(yuv_frame.*.format),
+        av.SWS_BILINEAR,
+        null,
+        null,
+        null,
+    );
+    defer av.sws_freeContext(out_sws_ctx);
+
+    var total_frames: usize = 0;
+    var processed_frames: usize = 0;
+
+    while (av.av_read_frame(input_ctx, packet) >= 0) {
+        defer av.av_packet_unref(packet);
+
+        if (packet.*.stream_index == stream_info.index) {
+            total_frames += 1;
+            if (av.avcodec_send_packet(dec_ctx, packet) < 0) {
+                continue;
+            }
+
+            while (av.avcodec_receive_frame(dec_ctx, frame) >= 0) {
+                _ = av.sws_scale(
+                    sws_ctx,
+                    &frame.*.data,
+                    &frame.*.linesize,
+                    0,
+                    frame.*.height,
+                    &rgb_frame.*.data,
+                    &rgb_frame.*.linesize,
+                );
+
+                try convertFrameToAscii(allocator, rgb_frame, args);
+
+                _ = av.sws_scale(
+                    out_sws_ctx,
+                    &rgb_frame.*.data,
+                    &rgb_frame.*.linesize,
+                    0,
+                    rgb_frame.*.height,
+                    &yuv_frame.*.data,
+                    &yuv_frame.*.linesize,
+                );
+
+                yuv_frame.*.pts = frame.*.pts;
+
+                var enc_packet = av.av_packet_alloc();
+                defer av.av_packet_free(&enc_packet);
+
+                if (av.avcodec_send_frame(enc_ctx, yuv_frame) >= 0) {
+                    while (av.avcodec_receive_packet(enc_ctx, enc_packet) >= 0) {
+                        enc_packet.*.stream_index = 0;
+                        enc_packet.*.pts = av.av_rescale_q(
+                            enc_packet.*.pts,
+                            enc_ctx.*.time_base,
+                            output.stream.*.time_base,
+                        );
+                        enc_packet.*.dts = av.av_rescale_q(
+                            enc_packet.*.dts,
+                            enc_ctx.*.time_base,
+                            output.stream.*.time_base,
+                        );
+                        enc_packet.*.duration = av.av_rescale_q(
+                            enc_packet.*.duration,
+                            enc_ctx.*.time_base,
+                            output.stream.*.time_base,
+                        );
+
+                        _ = av.av_interleaved_write_frame(output.ctx, enc_packet);
+                    }
+                }
+
+                processed_frames += 1;
+                progress(processed_frames, total_frames);
+            }
+        }
+    }
+}
+
+fn convertFrameToAscii(allocator: std.mem.Allocator, frame: *av.AVFrame, args: Args) !void {
+    const img = Image{
+        .data = frame.data[0],
+        .width = @intCast(frame.width),
+        .height = @intCast(frame.height),
+        .channels = 3,
+    };
+
+    const edge_result = try detectEdges(allocator, img, args);
+    defer if (args.detect_edges) {
+        allocator.free(edge_result.grayscale);
+        allocator.free(edge_result.magnitude);
+        allocator.free(edge_result.direction);
+    };
+
+    const ascii_img = try generateAsciiArt(allocator, img, edge_result, args);
+    defer allocator.free(ascii_img);
+
+    // Copy ascii art back to frame
+    const out_w = (img.width / CHAR_SIZE) * CHAR_SIZE;
+    const out_h = (img.height / CHAR_SIZE) * CHAR_SIZE;
+    const frame_linesize = @as(usize, @intCast(frame.linesize[0]));
+
+    for (0..out_h) |y| {
+        const src_start = y * out_w * 3;
+        const dst_start = y * frame_linesize;
+        const row_size = @min(out_w * 3, frame_linesize);
+        @memcpy(frame.data[0][dst_start..][0..row_size], ascii_img[src_start..][0..row_size]);
+    }
+}
+
+fn progress(curr: usize, total: usize) void {
+    const percentage = @as(f32, @floatFromInt(curr)) / @as(f32, @floatFromInt(total)) * 100;
+    std.debug.print("\rProgress: {d:.2}% ({d}/{d} frames)", .{ percentage, curr, total });
+}
+
+// -----------------------
+// IMAGE PROCESSING FUNCTIONS
+// -----------------------
+
 fn downloadImage(allocator: std.mem.Allocator, url: []const u8) ![]u8 {
     var client = std.http.Client{ .allocator = allocator };
     defer client.deinit();
@@ -414,6 +772,10 @@ fn loadImage(allocator: std.mem.Allocator, path: []const u8) !Image {
         .channels = @intCast(chan),
     };
 }
+
+// -----------------------
+// CORE ASCIIGEN FUNCTIONS
+// -----------------------
 
 fn rgbToGrayScale(allocator: std.mem.Allocator, img: Image) ![]u8 {
     const grayscale_img = try allocator.alloc(u8, img.width * img.height);
@@ -597,6 +959,10 @@ fn convertToAscii(
     }
 }
 
+// -----------------------
+// MAIN ENTRYPOINT AND HELPER FUNCTIONS
+// -----------------------
+
 pub fn main() !void {
     _ = av;
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -605,7 +971,13 @@ pub fn main() !void {
 
     const args = try parseArgs(allocator);
 
-    try processImage(allocator, args);
+    if (isVideoFile(args.input)) {
+        std.debug.print("----------DETECTED INPUT VIDEO----------", .{});
+        try processVideo(allocator, args);
+    } else {
+        std.debug.print("----------DETECTED INPUT IMAGE----------", .{});
+        try processImage(allocator, args);
+    }
 }
 
 fn processImage(allocator: std.mem.Allocator, args: Args) !void {
