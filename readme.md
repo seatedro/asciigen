@@ -34,9 +34,15 @@ run the program with the following options (the default zig install directory is
    - `-n, --invert_color`: Inverts the color values (optional)
    - `-s, --scale <float>`: set the downscale or upscale factor (optional, default: 1)
    - `-e, --detect_edges`: enable edge detection (optional)
-   - `--sigma1 <float>`: set the sigma1 value for DoG filter (optional, default: 0.3)
-   - `--sigma2 <float>`: set the sigma2 value for DoG filter (optional, default: 1.0)
+   - `    --sigma1 <float>`: set the sigma1 value for DoG filter (optional, default: 0.3)
+   - `    --sigma2 <float>`: set the sigma2 value for DoG filter (optional, default: 1.0)
    - `-b, --brightness_boost <float>`: increase/decrease perceived brightness (optional, default: 1.0)
+   advanced options (your image will break, probably, but you might get some cool results):
+   - `    --full_characters`: Uses full spectrum of characters in image.
+   - `    --ascii_chars <string>`: Use what characters you want to use in the image. (default: " .:-=+*%@#")
+   - `    --disable_sort`: Prevents sorting of the ascii_chars by size.
+   - `    --block_size <u8>`: Set the size of the blocks. (default: 8)
+   - `    --threshold_disabled`: Disables the threshold.
 
 2. examples:
 
@@ -66,3 +72,5 @@ run the program with the following options (the default zig install directory is
 output file needs to be a `.png` since i saw some weird issues with jpegs.
 
 the zig version is the only one i'll be working on from here on. the c code was just to get me started until i figured out some issues with the build.zig
+
+4. Using the long arguments on windows may or may not work. Please use the short arguments for now.
