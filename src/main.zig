@@ -171,6 +171,7 @@ const Args = struct {
     block_size: u8,
     threshold_disabled: bool,
     codec: ?[]const u8,
+    keep_audio: bool,
 };
 
 const Image = struct {
@@ -203,6 +204,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         \\    --block_size <u8>          Set the size of the blocks. (default: 8)
         \\    --threshold_disabled       Disables the threshold.
         \\    --codec <str>              Encoder Codec like "libx264" or "hevc_videotoolbox" (optional)
+        \\    --keep_audio               Keeps the audio if input is a video
     );
 
     var diag = clap.Diagnostic{};
@@ -263,6 +265,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         .block_size = res.args.block_size orelse 8,
         .threshold_disabled = res.args.threshold_disabled != 0,
         .codec = res.args.codec,
+        .keep_audio = res.args.keep_audio != 0,
     };
 }
 
@@ -452,21 +455,35 @@ fn createEncoder(codec_ctx: *av.AVCodecContext, stream: *av.AVStream, args: Args
 
 const OutputContext = struct {
     ctx: *av.AVFormatContext,
-    stream: *av.AVStream,
+    video_stream: *av.AVStream,
+    audio_stream: ?*av.AVStream,
 };
-fn createOutputCtx(output_path: []const u8, enc_ctx: *av.AVCodecContext) !OutputContext {
+fn createOutputCtx(output_path: []const u8, enc_ctx: *av.AVCodecContext, audio_stream: ?*av.AVStream) !OutputContext {
     var fmt_ctx: ?*av.AVFormatContext = null;
     if (av.avformat_alloc_output_context2(&fmt_ctx, null, null, output_path.ptr) < 0) {
         return error.FailedToCreateOutputCtx;
     }
 
-    const stream = av.avformat_new_stream(fmt_ctx, null);
-    if (stream == null) {
+    const video_stream = av.avformat_new_stream(fmt_ctx, null);
+    if (video_stream == null) {
         return error.FailedToCreateNewStream;
     }
 
-    if (av.avcodec_parameters_from_context(stream.*.codecpar, enc_ctx) < 0) {
+    if (av.avcodec_parameters_from_context(video_stream.*.codecpar, enc_ctx) < 0) {
         return error.FailedToSetCodecParams;
+    }
+
+    // Create audio stream
+    var audio_out_stream: ?*av.AVStream = null;
+    if (audio_stream) |as| {
+        audio_out_stream = av.avformat_new_stream(fmt_ctx, null);
+        if (audio_out_stream == null) {
+            return error.FailedToCreateAudioStream;
+        }
+
+        if (av.avcodec_parameters_copy(audio_out_stream.?.*.codecpar, as.*.codecpar) < 0) {
+            return error.FailedToCopyAudioCodecParams;
+        }
     }
 
     if (av.avio_open(&fmt_ctx.?.pb, output_path.ptr, av.AVIO_FLAG_WRITE) < 0) {
@@ -477,7 +494,26 @@ fn createOutputCtx(output_path: []const u8, enc_ctx: *av.AVCodecContext) !Output
         return error.FailedToWriteHeader;
     }
 
-    return .{ .ctx = fmt_ctx.?, .stream = stream };
+    return .{ .ctx = fmt_ctx.?, .video_stream = video_stream, .audio_stream = audio_out_stream };
+}
+
+fn openAudioStream(fmt_ctx: *av.AVFormatContext) !AVStream {
+    const index = av.av_find_best_stream(
+        fmt_ctx,
+        av.AVMEDIA_TYPE_AUDIO,
+        -1,
+        -1,
+        null,
+        0,
+    );
+    if (index < 0) {
+        return error.AudioStreamNotFound;
+    }
+
+    return .{
+        .stream = fmt_ctx.streams[@intCast(index)],
+        .index = index,
+    };
 }
 
 fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
@@ -491,7 +527,19 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
     var enc_ctx = try createEncoder(dec_ctx, stream_info.stream, args);
     defer av.avcodec_free_context(@ptrCast(&enc_ctx));
 
-    var output = try createOutputCtx(args.output, enc_ctx);
+    var audio_stream_info: ?AVStream = null;
+    if (args.keep_audio) {
+        audio_stream_info = openAudioStream(input_ctx) catch |err| blk: {
+            if (err == error.AudioStreamNotFound) {
+                std.debug.print("No audio stream found in input video. Continuing without audio.\n", .{});
+                break :blk null;
+            } else {
+                return err;
+            }
+        };
+    }
+
+    var output = try createOutputCtx(args.output, enc_ctx, if (audio_stream_info) |asi| asi.stream else null);
     defer {
         _ = av.av_write_trailer(output.ctx);
         if ((output.ctx.oformat.*.flags & av.AVFMT_NOFILE) == 0) {
@@ -499,6 +547,14 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
         }
         av.avformat_free_context(output.ctx);
     }
+
+    // Get total frames
+    const total_frames: usize = @intCast(getTotalFrames(input_ctx, stream_info));
+
+    // Set up progress bar
+    var progress = std.Progress.start(.{});
+    const root_node = progress.start("Processing video", total_frames);
+    defer root_node.end();
 
     var packet = av.av_packet_alloc();
     defer av.av_packet_free(&packet);
@@ -540,6 +596,18 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
     );
     defer av.sws_freeContext(sws_ctx);
 
+    // Set color space and range
+    _ = av.sws_setColorspaceDetails(
+        sws_ctx,
+        av.sws_getCoefficients(av.SWS_CS_ITU601),
+        0,
+        av.sws_getCoefficients(av.SWS_CS_DEFAULT),
+        0,
+        0,
+        (1 << 16) - 1,
+        (1 << 16) - 1,
+    );
+
     const out_sws_ctx = av.sws_getContext(
         rgb_frame.*.width,
         rgb_frame.*.height,
@@ -554,14 +622,10 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
     );
     defer av.sws_freeContext(out_sws_ctx);
 
-    var total_frames: usize = 0;
-    var processed_frames: usize = 0;
-
     while (av.av_read_frame(input_ctx, packet) >= 0) {
         defer av.av_packet_unref(packet);
 
         if (packet.*.stream_index == stream_info.index) {
-            total_frames += 1;
             if (av.avcodec_send_packet(dec_ctx, packet) < 0) {
                 continue;
             }
@@ -600,25 +664,34 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
                         enc_packet.*.pts = av.av_rescale_q(
                             enc_packet.*.pts,
                             enc_ctx.*.time_base,
-                            output.stream.*.time_base,
+                            output.video_stream.*.time_base,
                         );
                         enc_packet.*.dts = av.av_rescale_q(
                             enc_packet.*.dts,
                             enc_ctx.*.time_base,
-                            output.stream.*.time_base,
+                            output.video_stream.*.time_base,
                         );
                         enc_packet.*.duration = av.av_rescale_q(
                             enc_packet.*.duration,
                             enc_ctx.*.time_base,
-                            output.stream.*.time_base,
+                            output.video_stream.*.time_base,
                         );
 
                         _ = av.av_interleaved_write_frame(output.ctx, enc_packet);
                     }
                 }
 
-                processed_frames += 1;
-                progress(processed_frames, total_frames);
+                root_node.completeOne();
+            }
+        } else if (args.keep_audio and audio_stream_info != null and packet.*.stream_index == audio_stream_info.?.index) {
+            // Audio packet processing
+            packet.*.stream_index = output.audio_stream.?.index;
+            packet.*.pts = av.av_rescale_q(packet.*.pts, audio_stream_info.?.stream.time_base, output.audio_stream.?.time_base);
+            packet.*.dts = av.av_rescale_q(packet.*.dts, audio_stream_info.?.stream.time_base, output.audio_stream.?.time_base);
+            packet.*.duration = av.av_rescale_q(packet.*.duration, audio_stream_info.?.stream.time_base, output.audio_stream.?.time_base);
+
+            if (av.av_interleaved_write_frame(output.ctx, packet) < 0) {
+                return error.FailedToWriteAudioPacket;
             }
         }
     }
@@ -655,9 +728,32 @@ fn convertFrameToAscii(allocator: std.mem.Allocator, frame: *av.AVFrame, args: A
     }
 }
 
-fn progress(curr: usize, total: usize) void {
-    const percentage = @as(f32, @floatFromInt(curr)) / @as(f32, @floatFromInt(total)) * 100;
-    std.debug.print("\rProgress: {d:.2}% ({d}/{d} frames)", .{ percentage, curr, total });
+fn getTotalFrames(fmt_ctx: *av.AVFormatContext, stream_info: AVStream) i64 {
+    if (stream_info.stream.nb_frames > 0) {
+        return stream_info.stream.nb_frames;
+    }
+
+    var total_frames: i64 = 0;
+    var pkt: av.AVPacket = undefined;
+    while (av.av_read_frame(fmt_ctx, &pkt) >= 0) {
+        defer av.av_packet_unref(&pkt);
+        if (pkt.stream_index == stream_info.index) {
+            total_frames += 1;
+        }
+    }
+
+    // Reset the file position indicator
+    _ = av.avio_seek(fmt_ctx.*.pb, 0, av.SEEK_SET);
+    _ = av.avformat_seek_file(
+        fmt_ctx,
+        stream_info.index,
+        std.math.minInt(i64),
+        0,
+        std.math.maxInt(i64),
+        0,
+    );
+
+    return total_frames;
 }
 
 // -----------------------
@@ -925,6 +1021,7 @@ fn convertToAscii(
     ascii_char: u8,
     color: [3]u8,
     block_size: u8,
+    color_enabled: bool,
 ) void {
     if (ascii_char < 32 or ascii_char > 126) {
         // std.debug.print("Error: invalid ASCII character: {}\n", .{ascii_char});
@@ -934,6 +1031,11 @@ fn convertToAscii(
     const bitmap = &font_bitmap[ascii_char];
     const block_w = @min(block_size, w - x);
     const block_h = @min(block_size, img.len / (w * 3) - y);
+
+    // Define new colors
+    const background_color = [3]u8{ 21, 9, 27 }; // Blackcurrant
+    const text_color = [3]u8{ 211, 106, 111 }; // Indian Red
+
     var dy: usize = 0;
     while (dy < block_h) : (dy += 1) {
         var dx: usize = 0;
@@ -947,14 +1049,26 @@ fn convertToAscii(
                 const bit: u8 = @as(u8, 1) << shift;
                 if ((bitmap[dy] & bit) != 0) {
                     // Character pixel: use the original color
-                    img[idx] = color[0];
-                    img[idx + 1] = color[1];
-                    img[idx + 2] = color[2];
+                    if (color_enabled) {
+                        img[idx] = color[0];
+                        img[idx + 1] = color[1];
+                        img[idx + 2] = color[2];
+                    } else {
+                        img[idx] = text_color[0];
+                        img[idx + 1] = text_color[1];
+                        img[idx + 2] = text_color[2];
+                    }
                 } else {
                     // not a character pixel: set to black
-                    img[idx] = 0;
-                    img[idx + 1] = 0;
-                    img[idx + 2] = 0;
+                    if (color_enabled) {
+                        img[idx] = 0;
+                        img[idx + 1] = 0;
+                        img[idx + 2] = 0;
+                    } else {
+                        img[idx] = background_color[0];
+                        img[idx + 1] = background_color[1];
+                        img[idx + 2] = background_color[2];
+                    }
                 }
             }
         }
@@ -1087,7 +1201,7 @@ fn generateAsciiArt(
             const ascii_char = selectAsciiChar(block_info, args);
             const avg_color = calculateAverageColor(block_info, args);
 
-            convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color, args.block_size);
+            convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color, args.block_size, args.color);
         }
     }
 
