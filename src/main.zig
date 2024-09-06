@@ -172,6 +172,17 @@ const Args = struct {
     threshold_disabled: bool,
     codec: ?[]const u8,
     keep_audio: bool,
+    ffmpeg_options: std.StringHashMap([]const u8),
+    is_video: bool,
+
+    pub fn deinit(self: *Args) void {
+        var it = self.ffmpeg_options.iterator();
+        while (it.next()) |entry| {
+            self.ffmpeg_options.allocator.free(entry.key_ptr.*);
+            self.ffmpeg_options.allocator.free(entry.value_ptr.*);
+        }
+        self.ffmpeg_options.deinit();
+    }
 };
 
 const Image = struct {
@@ -193,7 +204,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         \\-o, --output <str>             Output image file
         \\-c, --color                    Use color ASCII characters
         \\-n, --invert_color             Inverts the color values
-        \\-s, --scale <f32>              Scale factor (default: 8)
+        \\-s, --scale <f32>              Scale factor (default: 1.0)
         \\-e, --detect_edges             Detect edges
         \\    --sigma1 <f32>             Sigma 1 for DoG filter (default: 0.5)
         \\    --sigma2 <f32>             Sigma 2 for DoG filter (default: 1.0)
@@ -205,6 +216,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         \\    --threshold_disabled       Disables the threshold.
         \\    --codec <str>              Encoder Codec like "libx264" or "hevc_videotoolbox" (optional)
         \\    --keep_audio               Keeps the audio if input is a video
+        \\<str>...
     );
 
     var diag = clap.Diagnostic{};
@@ -225,6 +237,24 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
     if (res.args.input == null) {
         std.debug.print("Error: input file must be specified.\n", .{});
         std.process.exit(1);
+    }
+
+    const is_video = isVideoFile(res.args.input.?);
+
+    var ffmpeg_options = std.StringHashMap([]const u8).init(allocator);
+    errdefer ffmpeg_options.deinit();
+    var pos: usize = 0;
+    while (pos < res.positionals.len) : (pos += 2) {
+        if (!is_video) {
+            std.debug.print("Warning: You have passed ffmpeg options for an image input, they will be ignored.\n", .{});
+            break;
+        }
+        const positional = res.positionals[pos];
+        if (std.mem.startsWith(u8, positional, "-")) {
+            const key = positional[1..];
+            const val = if (pos + 1 < res.positionals.len) res.positionals[pos + 1] else return error.ValueNotFound;
+            try ffmpeg_options.put(key, val);
+        }
     }
 
     return Args{
@@ -266,6 +296,8 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         .threshold_disabled = res.args.threshold_disabled != 0,
         .codec = res.args.codec,
         .keep_audio = res.args.keep_audio != 0,
+        .ffmpeg_options = ffmpeg_options,
+        .is_video = is_video,
     };
 }
 
@@ -402,6 +434,30 @@ fn createDecoder(stream: *av.AVStream) !*av.AVCodecContext {
     return codex_ctx;
 }
 
+fn setEncoderOption(enc_ctx: *av.AVCodecContext, key: []const u8, value: []const u8) bool {
+    var opt: ?*const av.AVOption = null;
+
+    // Try to find the option in AVCodecContext
+    opt = av.av_opt_find(@ptrCast(enc_ctx), key.ptr, null, 0, 0);
+    if (opt != null) {
+        if (av.av_opt_set(enc_ctx, key.ptr, value.ptr, 0) >= 0) {
+            return true;
+        }
+    }
+
+    // If not found or setting failed, try in priv_data
+    if (enc_ctx.*.priv_data != null) {
+        opt = av.av_opt_find(enc_ctx.*.priv_data, key.ptr, null, 0, 0);
+        if (opt != null) {
+            if (av.av_opt_set(enc_ctx.*.priv_data, key.ptr, value.ptr, 0) >= 0) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 fn createEncoder(codec_ctx: *av.AVCodecContext, stream: *av.AVStream, args: Args) !*av.AVCodecContext {
     const encoder = if (args.codec) |codec| av.avcodec_find_encoder_by_name(codec.ptr) else av.avcodec_find_encoder_by_name("h264_nvenc") orelse
         av.avcodec_find_encoder_by_name("hevc_amf") orelse
@@ -436,14 +492,13 @@ fn createEncoder(codec_ctx: *av.AVCodecContext, stream: *av.AVStream, args: Args
     const stride = (enc_ctx.*.width + 31) & ~@as(c_int, 31);
     _ = av.av_opt_set(enc_ctx, "stride", stride, 0);
 
-    if (encoder.*.id == av.AV_CODEC_ID_H264) {
-        _ = av.av_opt_set(enc_ctx.*.priv_data, "preset", "fast", 0);
-        _ = av.av_opt_set(enc_ctx.*.priv_data, "crf", "23", 0);
-        _ = av.av_opt_set(enc_ctx.*.priv_data, "profile", "high", 0);
-        _ = av.av_opt_set(enc_ctx.*.priv_data, "level", "4.2", 0);
-    } else {
-        _ = av.av_opt_set(enc_ctx.*.priv_data, "rc", "vbr", 0);
-        _ = av.av_opt_set_int(enc_ctx.*.priv_data, "q", 65, 0);
+    var it = args.ffmpeg_options.iterator();
+    while (it.next()) |entry| {
+        const k = entry.key_ptr.*;
+        const v = entry.value_ptr.*;
+        if (!setEncoderOption(enc_ctx, k, v)) {
+            std.debug.print("Warning: Failed to set FFmpeg option: {s}={s}\n", .{ k, v });
+        }
     }
 
     if (av.avcodec_open2(enc_ctx, encoder, null) < 0) {
@@ -1113,9 +1168,10 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const args = try parseArgs(allocator);
+    var args = try parseArgs(allocator);
+    defer args.deinit();
 
-    if (isVideoFile(args.input)) {
+    if (args.is_video) {
         try processVideo(allocator, args);
     } else {
         try processImage(allocator, args);
