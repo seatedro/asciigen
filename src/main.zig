@@ -556,6 +556,10 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
     const root_node = progress.start("Processing video", total_frames);
     defer root_node.end();
 
+    // Create a child node for ETA
+    var eta_node = progress.start("(time elapsed (s)/time remaining(s))", 100);
+    defer eta_node.end();
+
     var packet = av.av_packet_alloc();
     defer av.av_packet_free(&packet);
 
@@ -565,10 +569,15 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
     var rgb_frame = av.av_frame_alloc();
     defer av.av_frame_free(&rgb_frame);
 
-    rgb_frame.*.format = av.AV_PIX_FMT_RGB24;
+    const input_pix_fmt = dec_ctx.*.pix_fmt;
+    std.debug.print("Input pixel format: {s}\n", .{av.av_get_pix_fmt_name(input_pix_fmt)});
+
+    const output_pix_fmt = av.AV_PIX_FMT_RGB24;
+
+    rgb_frame.*.format = output_pix_fmt;
     rgb_frame.*.width = @divFloor(dec_ctx.*.width, args.block_size) * args.block_size;
     rgb_frame.*.height = @divFloor(dec_ctx.*.height, args.block_size) * args.block_size;
-    if (av.av_frame_get_buffer(rgb_frame, 32) < 0) {
+    if (av.av_frame_get_buffer(rgb_frame, 0) < 0) {
         return error.FailedToAllocFrameBuf;
     }
 
@@ -578,17 +587,17 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
     yuv_frame.*.format = av.AV_PIX_FMT_YUV420P;
     yuv_frame.*.width = enc_ctx.*.width;
     yuv_frame.*.height = enc_ctx.*.height;
-    if (av.av_frame_get_buffer(yuv_frame, 32) < 0) {
+    if (av.av_frame_get_buffer(yuv_frame, 0) < 0) {
         return error.FailedToAllocFrameBuf;
     }
 
     const sws_ctx = av.sws_getContext(
         dec_ctx.width,
         dec_ctx.height,
-        dec_ctx.pix_fmt,
-        rgb_frame.*.width,
-        rgb_frame.*.height,
-        @intCast(rgb_frame.*.format),
+        input_pix_fmt,
+        dec_ctx.width,
+        dec_ctx.height,
+        output_pix_fmt,
         av.SWS_BILINEAR,
         null,
         null,
@@ -599,7 +608,7 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
     // Set color space and range
     _ = av.sws_setColorspaceDetails(
         sws_ctx,
-        av.sws_getCoefficients(av.SWS_CS_ITU601),
+        av.sws_getCoefficients(av.SWS_CS_DEFAULT),
         0,
         av.sws_getCoefficients(av.SWS_CS_DEFAULT),
         0,
@@ -621,6 +630,11 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
         null,
     );
     defer av.sws_freeContext(out_sws_ctx);
+
+    var processed_frames: usize = 0;
+    const start_time = std.time.milliTimestamp();
+    var last_update_time = start_time;
+    const update_interval: i64 = 1000; // Update every 1 second
 
     while (av.av_read_frame(input_ctx, packet) >= 0) {
         defer av.av_packet_unref(packet);
@@ -681,7 +695,21 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
                     }
                 }
 
+                processed_frames += 1;
                 root_node.completeOne();
+
+                const current_time = std.time.milliTimestamp();
+                if (current_time - last_update_time >= update_interval) {
+                    const elapsed_time = @as(f64, @floatFromInt(current_time - start_time)) / 1000.0;
+                    const frames_per_second = @as(f64, @floatFromInt(processed_frames)) / elapsed_time;
+                    const estimated_total_time = @as(f64, @floatFromInt(total_frames)) / frames_per_second;
+                    const estimated_remaining_time = estimated_total_time - elapsed_time;
+
+                    eta_node.setCompletedItems(@as(usize, (@intFromFloat(elapsed_time))));
+                    eta_node.setEstimatedTotalItems(@intFromFloat(estimated_remaining_time));
+
+                    last_update_time = current_time;
+                }
             }
         } else if (args.keep_audio and audio_stream_info != null and packet.*.stream_index == audio_stream_info.?.index) {
             // Audio packet processing
@@ -1005,9 +1033,9 @@ fn getEdgeChar(mag: f32, dir: f32, threshold_disabled: bool) ?u8 {
     const angle = (dir + std.math.pi) * (@as(f32, 180) / std.math.pi);
     return switch (@as(u8, @intFromFloat(@mod(angle + 22.5, 180) / 45))) {
         0, 4 => '-',
-        1, 5 => '/',
+        1, 5 => '\\',
         2, 6 => '|',
-        3, 7 => '\\',
+        3, 7 => '/',
         else => unreachable,
     };
 }
