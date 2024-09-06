@@ -257,9 +257,9 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         .block_size = res.args.block_size orelse 8,
         .threshold_disabled = res.args.threshold_disabled != 0,
         .custom_color = res.args.custom_color != 0,
-        .r = res.args.r orelse 0,
-        .g = res.args.g orelse 0,
-        .b = res.args.b orelse 0,
+        .r = res.args.r orelse 128,
+        .g = res.args.g orelse 128,
+        .b = res.args.b orelse 128,
     };
 }
 
