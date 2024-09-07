@@ -158,6 +158,10 @@ const Args = struct {
     disable_sort: bool,
     block_size: u8,
     threshold_disabled: bool,
+    custom_color: bool,
+    r: u8,
+    g: u8,
+    b: u8,
 };
 
 const Image = struct {
@@ -189,6 +193,10 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         \\    --disable_sort             Prevents sorting of the ascii_chars by size.
         \\    --block_size <u8>          Set the size of the blocks. (default: 8)
         \\    --threshold_disabled       Disables the threshold.
+        \\    --custom_color             Enables custom color from the --r, --g, --b parameters.
+        \\    --r <u8>                   Sets the r color.
+        \\    --g <u8>                   Sets the g color.
+        \\    --b <u8>                   Sets the b color.
     );
 
     var diag = clap.Diagnostic{};
@@ -248,6 +256,10 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         .disable_sort = res.args.disable_sort != 0,
         .block_size = res.args.block_size orelse 8,
         .threshold_disabled = res.args.threshold_disabled != 0,
+        .custom_color = res.args.custom_color != 0,
+        .r = res.args.r orelse 128,
+        .g = res.args.g orelse 128,
+        .b = res.args.b orelse 128,
     };
 }
 
@@ -775,21 +787,38 @@ fn selectAsciiChar(block_info: BlockInfo, args: Args) u8 {
 
 fn calculateAverageColor(block_info: BlockInfo, args: Args) [3]u8 {
     if (args.color) {
-        var color = [3]u8{
-            @intCast(block_info.sum_color[0] / block_info.pixel_count),
-            @intCast(block_info.sum_color[1] / block_info.pixel_count),
-            @intCast(block_info.sum_color[2] / block_info.pixel_count),
-        };
+        if (args.custom_color) {
+            const color = [3]u8{
+                args.r,
+                args.g,
+                args.b,
+            };
+            return color;
+        } else {
+            var color = [3]u8{
+                @intCast(block_info.sum_color[0] / block_info.pixel_count),
+                @intCast(block_info.sum_color[1] / block_info.pixel_count),
+                @intCast(block_info.sum_color[2] / block_info.pixel_count),
+            };
 
-        if (args.invert_color) {
-            color[0] = 255 - color[0];
-            color[1] = 255 - color[1];
-            color[2] = 255 - color[2];
+            if (args.invert_color) {
+                color[0] = 255 - color[0];
+                color[1] = 255 - color[1];
+                color[2] = 255 - color[2];
+            }
+            return color;
         }
-
-        return color;
     } else {
-        return .{ 255, 255, 255 };
+        if (args.custom_color) {
+            const color = [3]u8{
+                args.r,
+                args.g,
+                args.b,
+            };
+            return color;
+        } else {
+            return .{ 255, 255, 255 };
+        }
     }
 }
 
@@ -839,6 +868,10 @@ test "test_ascii_generation" {
         .disable_sort = false,
         .block_size = 8,
         .threshold_disabled = false,
+        .custom_color = false,
+        .r = 0,
+        .g = 0,
+        .b = 0,
     };
 
     // Run the main function with test arguments
