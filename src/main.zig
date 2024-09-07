@@ -835,12 +835,26 @@ fn calculateAverageColor(block_info: BlockInfo, args: Args) [3]u8 {
         }
     } else {
         if (args.custom_color) {
-            const color = [3]u8{
-                args.r,
-                args.g,
-                args.b,
-            };
-            return color;
+            if (args.invert_color) {
+                var color = [3]u8{
+                    args.r,
+                    args.g,
+                    args.b,
+                };
+                if (args.invert_color) {
+                    color[0] = 255 - color[0];
+                    color[1] = 255 - color[1];
+                    color[2] = 255 - color[2];
+                }
+                return color;
+            } else {
+                const color = [3]u8{
+                    args.r,
+                    args.g,
+                    args.b,
+                };
+                return color;
+            }
         } else {
             return .{ 255, 255, 255 };
         }
