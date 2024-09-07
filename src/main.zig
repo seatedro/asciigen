@@ -162,6 +162,10 @@ const Args = struct {
     r: u8,
     g: u8,
     b: u8,
+    background_color: bool,
+    r_bg: u8,
+    g_bg: u8,
+    b_bg: u8,
 };
 
 const Image = struct {
@@ -197,6 +201,10 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         \\    --r <u8>                   Sets the r color.
         \\    --g <u8>                   Sets the g color.
         \\    --b <u8>                   Sets the b color.
+        \\    --background_color         Enables the background color to be set.
+        \\    --r_bg <u8>                Sets the r color of the background.
+        \\    --g_bg <u8>                Sets the g color of the background.
+        \\    --b_bg <u8>                Sets the b color of the background.
     );
 
     var diag = clap.Diagnostic{};
@@ -260,6 +268,10 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         .r = res.args.r orelse 128,
         .g = res.args.g orelse 128,
         .b = res.args.b orelse 128,
+        .background_color = res.args.background_color != 0,
+        .r_bg = res.args.r_bg orelse 0,
+        .g_bg = res.args.g_bg orelse 0,
+        .b_bg = res.args.b_bg orelse 0,
     };
 }
 
@@ -563,6 +575,8 @@ fn convertToAscii(
     ascii_char: u8,
     color: [3]u8,
     block_size: u8,
+    background: bool,
+    background_color: [3]u8,
 ) void {
     if (ascii_char < 32 or ascii_char > 126) {
         // std.debug.print("Error: invalid ASCII character: {}\n", .{ascii_char});
@@ -590,9 +604,15 @@ fn convertToAscii(
                     img[idx + 2] = color[2];
                 } else {
                     // not a character pixel: set to black
-                    img[idx] = 0;
-                    img[idx + 1] = 0;
-                    img[idx + 2] = 0;
+                    if (background) {
+                        img[idx] = background_color[0];
+                        img[idx + 1] = background_color[1];
+                        img[idx + 2] = background_color[2];
+                    } else {
+                        img[idx] = 0;
+                        img[idx + 1] = 0;
+                        img[idx + 2] = 0;
+                    }
                 }
             }
         }
@@ -705,6 +725,11 @@ fn generateAsciiArt(
     const out_w = (img.width / args.block_size) * args.block_size;
     const out_h = (img.height / args.block_size) * args.block_size;
 
+    var background_color: [3]u8 = undefined;
+    if (args.background_color) {
+        background_color = .{ args.r_bg, args.g_bg, args.b_bg };
+    }
+
     const ascii_img = try allocator.alloc(u8, out_w * out_h * 3);
     @memset(ascii_img, 0);
 
@@ -716,7 +741,7 @@ fn generateAsciiArt(
             const ascii_char = selectAsciiChar(block_info, args);
             const avg_color = calculateAverageColor(block_info, args);
 
-            convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color, args.block_size);
+            convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color, args.block_size, args.background_color, background_color);
         }
     }
 

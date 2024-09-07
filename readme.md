@@ -26,7 +26,7 @@ run the program with the following options (the default zig install directory is
    ```
    /path/to/asciigen [options]
    ```
-1. options:
+1. Options:
    - `-h, --help`: print the help message and exit
    - `-i, --input <file>`: specify the input image file path (local path/URL) (required)
    - `-o, --output <file>`: specify the output image file (optional, default: `<input>_ascii.jpg`)
@@ -37,19 +37,23 @@ run the program with the following options (the default zig install directory is
    - `    --sigma1 <float>`: set the sigma1 value for DoG filter (optional, default: 0.3)
    - `    --sigma2 <float>`: set the sigma2 value for DoG filter (optional, default: 1.0)
    - `-b, --brightness_boost <float>`: increase/decrease perceived brightness (optional, default: 1.0)
-   
-   advanced options (your image will break, probably, but you might get some cool results):
+
+   Advanced options (your image will break, probably, but you might get some cool results):
    - `    --full_characters`: Uses full spectrum of characters in image.
    - `    --ascii_chars <string>`: Use what characters you want to use in the image. (default: " .:-=+*%@#")
    - `    --disable_sort`: Prevents sorting of the ascii_chars by size.
    - `    --block_size <u8>`: Set the size of the blocks. (default: 8)
    - `    --threshold_disabled`: Disables the threshold.
 
-   set a custom color value
-   - `    --custom_color`: Enables custom color from the --r, --g, --b parameters
+   Advanced color settings:
+   - `    --custom_color`: Enables custom color for the image from the --r, --g, --b parameters
    - `    --r`: Sets the r color.
    - `    --g`: Sets the g color.
    - `    --b`: Sets the b color.
+   - `    --background_color`: Enables background color for the image from the --r_bg, --g_bg, --b_bg parameters
+   - `    --r_bg`: Sets the r color of the background.
+   - `    --g_bg`: Sets the g color of the background.
+   - `    --b_bg`: Sets the b color of the background.
 
 2. examples:
 
