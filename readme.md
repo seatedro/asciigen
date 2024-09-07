@@ -42,18 +42,18 @@ run the program with the following options (the default zig install directory is
    - `    --full_characters`: Uses full spectrum of characters in image.
    - `    --ascii_chars <string>`: Use what characters you want to use in the image. (default: " .:-=+*%@#")
    - `    --disable_sort`: Prevents sorting of the ascii_chars by size.
-   - `    --block_size <u8>`: Set the size of the blocks. (default: 8)
+   - `    --block_size <int>`: Set the size of the blocks. (default: 8)
    - `    --threshold_disabled`: Disables the threshold.
 
    Advanced color settings:
    - `    --custom_color`: Enables custom color for the image from the --r, --g, --b parameters
-   - `    --r`: Sets the r color.
-   - `    --g`: Sets the g color.
-   - `    --b`: Sets the b color.
+   - `    --r <int>`: Sets the r color.
+   - `    --g <int>`: Sets the g color.
+   - `    --b <int>`: Sets the b color.
    - `    --background_color`: Enables background color for the image from the --r_bg, --g_bg, --b_bg parameters
-   - `    --r_bg`: Sets the r color of the background.
-   - `    --g_bg`: Sets the g color of the background.
-   - `    --b_bg`: Sets the b color of the background.
+   - `    --r_bg <int>`: Sets the r color of the background.
+   - `    --g_bg <int>`: Sets the g color of the background.
+   - `    --b_bg <int>`: Sets the b color of the background.
 
 2. examples:
 
