@@ -1,12 +1,14 @@
 # ascii from image
 
-converts an image to ascii art
+converts images/video to ascii art
 
 ## installation
 
-### pre-built binaries (SOMEONE PLEASE MAKE THIS WORK)
+### i'm not doing pre-built binaries
 
-you can download the latest release from github: [here](https://github.com/seatedro/asciigen/releases/latest)
+it is getting too annoying to handle cross plat binary releases using my apple silicon mac. just build from source.
+
+or wait till i release the web app!
 
 ### build from source
 
@@ -43,6 +45,8 @@ run the program with the following options (the default zig install directory is
    - `    --disable_sort`: Prevents sorting of the ascii_chars by size.
    - `    --block_size <u8>`: Set the size of the blocks. (default: 8)
    - `    --threshold_disabled`: Disables the threshold.
+   - `    --codec <string>`: Set the encoder codec like "libx264" or "hevc_videotoolbox". (default: searches for encoders on your machine)
+   - `    --keep_audio`: Preserves audio from input video.
 
 2. examples:
 
@@ -67,10 +71,20 @@ run the program with the following options (the default zig install directory is
    asciigen -i "https://w.wallhaven.cc/full/p9/wallhaven-p9gr2p.jpg" -o output.png -e -c-b 1.5
    ```
 
-3. the program will generate an ascii art version of your input image and save it as a new image file.
+   with an input video (no urls allowed):
+   ```bash
+   asciigen -i /path/to/input/video.mp4 -o ascii.mp4 --codec hevc_nvenc --keep_audio
+   ```
 
-output file needs to be a `.png` since i saw some weird issues with jpegs.
+   with input video and custom ffmpeg encoder options:
+   ```bash
+   asciigen -i /path/to/input/video.mp4 -o ascii.mp4 -c --codec libx264 --keep_audio-- -preset fast -crf 20
+   ```
+
+3. the program will generate an ascii art version of your input media and save it as a new media file.
+
+for images: output file needs to be a `.png` since i saw some weird issues with jpegs.
 
 the zig version is the only one i'll be working on from here on. the c code was just to get me started until i figured out some issues with the build.zig
 
-4. Using the long arguments on windows may or may not work. Please use the short arguments for now.
+4. using the long arguments on windows may or may not work. please use the short arguments for now.

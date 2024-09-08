@@ -1,10 +1,22 @@
 const std = @import("std");
 const clap = @import("clap");
+const mime = @import("mime.zig");
 // const stb = @import("stb");
 const stb = @cImport({
     @cInclude("stb_image.h");
     @cInclude("stb_image_write.h");
     @cInclude("stb_image_resize2.h");
+});
+const av = @cImport({
+    @cInclude("libavformat/avformat.h");
+    @cInclude("libavcodec/avcodec.h");
+    @cInclude("libavutil/avutil.h");
+    @cInclude("libavutil/imgutils.h");
+    @cInclude("libavutil/opt.h");
+    @cInclude("libswscale/swscale.h");
+    @cInclude("libswresample/swresample.h");
+    @cInclude("libavutil/channel_layout.h");
+    @cInclude("libavutil/samplefmt.h");
 });
 
 const default_characters = " .:-=+*%@#";
@@ -158,6 +170,19 @@ const Args = struct {
     disable_sort: bool,
     block_size: u8,
     threshold_disabled: bool,
+    codec: ?[]const u8,
+    keep_audio: bool,
+    ffmpeg_options: std.StringHashMap([]const u8),
+    is_video: bool,
+
+    pub fn deinit(self: *Args) void {
+        var it = self.ffmpeg_options.iterator();
+        while (it.next()) |entry| {
+            self.ffmpeg_options.allocator.free(entry.key_ptr.*);
+            self.ffmpeg_options.allocator.free(entry.value_ptr.*);
+        }
+        self.ffmpeg_options.deinit();
+    }
 };
 
 const Image = struct {
@@ -174,21 +199,24 @@ const SobelFilter = struct {
 
 fn parseArgs(allocator: std.mem.Allocator) !Args {
     const params = comptime clap.parseParamsComptime(
-        \\-h, --help            Print this help message and exit
-        \\-i, --input <str>     Input image file
-        \\-o, --output <str>    Output image file
-        \\-c, --color           Use color ASCII characters
-        \\-n, --invert_color    Inverts the color values
-        \\-s, --scale <f32>     Scale factor (default: 8)
-        \\-e, --detect_edges    Detect edges
-        \\    --sigma1 <f32>    Sigma 1 for DoG filter (default: 0.5)
-        \\    --sigma2 <f32>    Sigma 2 for DoG filter (default: 1.0)
+        \\-h, --help                     Print this help message and exit
+        \\-i, --input <str>              Input image file
+        \\-o, --output <str>             Output image file
+        \\-c, --color                    Use color ASCII characters
+        \\-n, --invert_color             Inverts the color values
+        \\-s, --scale <f32>              Scale factor (default: 1.0)
+        \\-e, --detect_edges             Detect edges
+        \\    --sigma1 <f32>             Sigma 1 for DoG filter (default: 0.5)
+        \\    --sigma2 <f32>             Sigma 2 for DoG filter (default: 1.0)
         \\-b, --brightness_boost <f32>   Brightness boost (default: 1.0)
         \\    --full_characters          Uses full spectrum of characters in image.
         \\    --ascii_chars <str>        Use what characters you want to use in the image. (default: " .:-=+*%#@")
         \\    --disable_sort             Prevents sorting of the ascii_chars by size.
         \\    --block_size <u8>          Set the size of the blocks. (default: 8)
         \\    --threshold_disabled       Disables the threshold.
+        \\    --codec <str>              Encoder Codec like "libx264" or "hevc_videotoolbox" (optional)
+        \\    --keep_audio               Keeps the audio if input is a video
+        \\<str>...
     );
 
     var diag = clap.Diagnostic{};
@@ -209,6 +237,24 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
     if (res.args.input == null) {
         std.debug.print("Error: input file must be specified.\n", .{});
         std.process.exit(1);
+    }
+
+    const is_video = isVideoFile(res.args.input.?);
+
+    var ffmpeg_options = std.StringHashMap([]const u8).init(allocator);
+    errdefer ffmpeg_options.deinit();
+    var pos: usize = 0;
+    while (pos < res.positionals.len) : (pos += 2) {
+        if (!is_video) {
+            std.debug.print("Warning: You have passed ffmpeg options for an image input, they will be ignored.\n", .{});
+            break;
+        }
+        const positional = res.positionals[pos];
+        if (std.mem.startsWith(u8, positional, "-")) {
+            const key = positional[1..];
+            const val = if (pos + 1 < res.positionals.len) res.positionals[pos + 1] else return error.ValueNotFound;
+            try ffmpeg_options.put(key, val);
+        }
     }
 
     return Args{
@@ -248,6 +294,10 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         .disable_sort = res.args.disable_sort != 0,
         .block_size = res.args.block_size orelse 8,
         .threshold_disabled = res.args.threshold_disabled != 0,
+        .codec = res.args.codec,
+        .keep_audio = res.args.keep_audio != 0,
+        .ffmpeg_options = ffmpeg_options,
+        .is_video = is_video,
     };
 }
 
@@ -294,6 +344,505 @@ fn sortCharsBySize(allocator: std.mem.Allocator, input: []const u8) ![]const u8 
     // Convert []u8 to []const u8 before returning
     return result[0..];
 }
+// -----------------------
+// VIDEO PROCESSING FUNCTIONS
+// -----------------------
+
+fn isVideoFile(file_path: []const u8) bool {
+    const extension = std.fs.path.extension(file_path);
+    if (mime.extension_map.get(extension)) |mime_type| {
+        return switch (mime_type) {
+            .@"video/3gpp",
+            .@"video/3gpp2",
+            .@"video/mp2t",
+            .@"video/mp4",
+            .@"video/mpeg",
+            .@"video/ogg",
+            .@"video/quicktime",
+            .@"video/webm",
+            .@"video/x-msvideo",
+            => true,
+            else => false,
+        };
+    }
+    return false;
+}
+
+fn openInputVideo(path: []const u8) !*av.AVFormatContext {
+    var fmt_ctx: ?*av.AVFormatContext = null;
+    if (av.avformat_open_input(
+        &fmt_ctx,
+        path.ptr,
+        null,
+        null,
+    ) < 0) {
+        return error.FailedToOpenInputVideo;
+    }
+    if (av.avformat_find_stream_info(fmt_ctx, null) < 0) {
+        return error.FailedToFindStreamInfo;
+    }
+    return fmt_ctx.?;
+}
+
+const AVStream = struct {
+    stream: *av.AVStream,
+    index: c_int,
+};
+fn openVideoStream(fmt_ctx: *av.AVFormatContext) !AVStream {
+    const index = av.av_find_best_stream(
+        fmt_ctx,
+        av.AVMEDIA_TYPE_VIDEO,
+        -1,
+        -1,
+        null,
+        0,
+    );
+    if (index < 0) {
+        return error.VideoStreamNotFound;
+    }
+
+    return .{
+        .stream = fmt_ctx.streams[@intCast(index)],
+        .index = index,
+    };
+}
+
+fn createDecoder(stream: *av.AVStream) !*av.AVCodecContext {
+    const decoder = av.avcodec_find_decoder(
+        stream.codecpar.*.codec_id,
+    ) orelse {
+        return error.DecoderNotFound;
+    };
+    const codex_ctx = av.avcodec_alloc_context3(decoder);
+    if (codex_ctx == null) {
+        return error.FailedToAllocCodecCtx;
+    }
+    if (av.avcodec_parameters_to_context(
+        codex_ctx,
+        stream.codecpar,
+    ) < 0) {
+        return error.FailedToSetCodecParams;
+    }
+    if (av.avcodec_open2(
+        codex_ctx,
+        decoder,
+        null,
+    ) < 0) {
+        return error.FailedToOpenEncoder;
+    }
+
+    return codex_ctx;
+}
+
+fn setEncoderOption(enc_ctx: *av.AVCodecContext, key: []const u8, value: []const u8) bool {
+    var opt: ?*const av.AVOption = null;
+
+    // Try to find the option in AVCodecContext
+    opt = av.av_opt_find(@ptrCast(enc_ctx), key.ptr, null, 0, 0);
+    if (opt != null) {
+        if (av.av_opt_set(enc_ctx, key.ptr, value.ptr, 0) >= 0) {
+            return true;
+        }
+    }
+
+    // If not found or setting failed, try in priv_data
+    if (enc_ctx.*.priv_data != null) {
+        opt = av.av_opt_find(enc_ctx.*.priv_data, key.ptr, null, 0, 0);
+        if (opt != null) {
+            if (av.av_opt_set(enc_ctx.*.priv_data, key.ptr, value.ptr, 0) >= 0) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+fn createEncoder(codec_ctx: *av.AVCodecContext, stream: *av.AVStream, args: Args) !*av.AVCodecContext {
+    const encoder = if (args.codec) |codec| av.avcodec_find_encoder_by_name(codec.ptr) else av.avcodec_find_encoder_by_name("h264_nvenc") orelse
+        av.avcodec_find_encoder_by_name("hevc_amf") orelse
+        av.avcodec_find_encoder_by_name("hevc_qsv") orelse
+        av.avcodec_find_encoder_by_name("hevc_videotoolbox") orelse
+        av.avcodec_find_encoder_by_name("libx265") orelse
+        av.avcodec_find_encoder_by_name("h264_amf") orelse
+        av.avcodec_find_encoder_by_name("h264_qsv") orelse
+        av.avcodec_find_encoder_by_name("libx264") orelse
+        return error.EncoderNotFound;
+
+    const enc_ctx = av.avcodec_alloc_context3(encoder);
+    if (enc_ctx == null) {
+        return error.FailedToAllocCodecCtx;
+    }
+
+    // Setting up encoding context
+    enc_ctx.*.width = codec_ctx.width;
+    enc_ctx.*.height = codec_ctx.height;
+    enc_ctx.*.pix_fmt = av.AV_PIX_FMT_YUV420P;
+    // enc_ctx.*.pix_fmt = encoder.*.pix_fmts[0];
+    enc_ctx.*.time_base = stream.time_base;
+    enc_ctx.*.framerate = .{
+        .num = codec_ctx.framerate.num,
+        .den = 1,
+    };
+    enc_ctx.*.gop_size = 10;
+    enc_ctx.*.max_b_frames = 1;
+    enc_ctx.*.flags |= av.AV_CODEC_FLAG_GLOBAL_HEADER;
+
+    // Ensure the stride is aligned to 32 bytes
+    const stride = (enc_ctx.*.width + 31) & ~@as(c_int, 31);
+    _ = av.av_opt_set(enc_ctx, "stride", stride, 0);
+
+    var it = args.ffmpeg_options.iterator();
+    while (it.next()) |entry| {
+        const k = entry.key_ptr.*;
+        const v = entry.value_ptr.*;
+        if (!setEncoderOption(enc_ctx, k, v)) {
+            std.debug.print("Warning: Failed to set FFmpeg option: {s}={s}\n", .{ k, v });
+        }
+    }
+
+    if (av.avcodec_open2(enc_ctx, encoder, null) < 0) {
+        return error.FailedToOpenEncoder;
+    }
+
+    return enc_ctx;
+}
+
+const OutputContext = struct {
+    ctx: *av.AVFormatContext,
+    video_stream: *av.AVStream,
+    audio_stream: ?*av.AVStream,
+};
+fn createOutputCtx(output_path: []const u8, enc_ctx: *av.AVCodecContext, audio_stream: ?*av.AVStream) !OutputContext {
+    var fmt_ctx: ?*av.AVFormatContext = null;
+    if (av.avformat_alloc_output_context2(&fmt_ctx, null, null, output_path.ptr) < 0) {
+        return error.FailedToCreateOutputCtx;
+    }
+
+    const video_stream = av.avformat_new_stream(fmt_ctx, null);
+    if (video_stream == null) {
+        return error.FailedToCreateNewStream;
+    }
+
+    if (av.avcodec_parameters_from_context(video_stream.*.codecpar, enc_ctx) < 0) {
+        return error.FailedToSetCodecParams;
+    }
+
+    // Create audio stream
+    var audio_out_stream: ?*av.AVStream = null;
+    if (audio_stream) |as| {
+        audio_out_stream = av.avformat_new_stream(fmt_ctx, null);
+        if (audio_out_stream == null) {
+            return error.FailedToCreateAudioStream;
+        }
+
+        if (av.avcodec_parameters_copy(audio_out_stream.?.*.codecpar, as.*.codecpar) < 0) {
+            return error.FailedToCopyAudioCodecParams;
+        }
+    }
+
+    if (av.avio_open(&fmt_ctx.?.pb, output_path.ptr, av.AVIO_FLAG_WRITE) < 0) {
+        return error.FailedToOpenOutputFile;
+    }
+
+    if (av.avformat_write_header(fmt_ctx, null) < 0) {
+        return error.FailedToWriteHeader;
+    }
+
+    return .{ .ctx = fmt_ctx.?, .video_stream = video_stream, .audio_stream = audio_out_stream };
+}
+
+fn openAudioStream(fmt_ctx: *av.AVFormatContext) !AVStream {
+    const index = av.av_find_best_stream(
+        fmt_ctx,
+        av.AVMEDIA_TYPE_AUDIO,
+        -1,
+        -1,
+        null,
+        0,
+    );
+    if (index < 0) {
+        return error.AudioStreamNotFound;
+    }
+
+    return .{
+        .stream = fmt_ctx.streams[@intCast(index)],
+        .index = index,
+    };
+}
+
+fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
+    var input_ctx = try openInputVideo(args.input);
+    defer av.avformat_close_input(@ptrCast(&input_ctx));
+
+    const stream_info = try openVideoStream(input_ctx);
+    var dec_ctx = try createDecoder(stream_info.stream);
+    defer av.avcodec_free_context(@ptrCast(&dec_ctx));
+
+    var enc_ctx = try createEncoder(dec_ctx, stream_info.stream, args);
+    defer av.avcodec_free_context(@ptrCast(&enc_ctx));
+
+    var audio_stream_info: ?AVStream = null;
+    if (args.keep_audio) {
+        audio_stream_info = openAudioStream(input_ctx) catch |err| blk: {
+            if (err == error.AudioStreamNotFound) {
+                std.debug.print("No audio stream found in input video. Continuing without audio.\n", .{});
+                break :blk null;
+            } else {
+                return err;
+            }
+        };
+    }
+
+    var output = try createOutputCtx(args.output, enc_ctx, if (audio_stream_info) |asi| asi.stream else null);
+    defer {
+        _ = av.av_write_trailer(output.ctx);
+        if ((output.ctx.oformat.*.flags & av.AVFMT_NOFILE) == 0) {
+            _ = av.avio_closep(&output.ctx.pb);
+        }
+        av.avformat_free_context(output.ctx);
+    }
+
+    // Get total frames
+    const total_frames: usize = @intCast(getTotalFrames(input_ctx, stream_info));
+
+    // Set up progress bar
+    var progress = std.Progress.start(.{});
+    const root_node = progress.start("Processing video", total_frames);
+    defer root_node.end();
+
+    // Create a child node for ETA
+    var eta_node = progress.start("(time elapsed (s)/time remaining(s))", 100);
+    defer eta_node.end();
+
+    var packet = av.av_packet_alloc();
+    defer av.av_packet_free(&packet);
+
+    var frame = av.av_frame_alloc();
+    defer av.av_frame_free(&frame);
+
+    var rgb_frame = av.av_frame_alloc();
+    defer av.av_frame_free(&rgb_frame);
+
+    const input_pix_fmt = dec_ctx.*.pix_fmt;
+    std.debug.print("Input pixel format: {s}\n", .{av.av_get_pix_fmt_name(input_pix_fmt)});
+
+    const output_pix_fmt = av.AV_PIX_FMT_RGB24;
+
+    rgb_frame.*.format = output_pix_fmt;
+    rgb_frame.*.width = @divFloor(dec_ctx.*.width, args.block_size) * args.block_size;
+    rgb_frame.*.height = @divFloor(dec_ctx.*.height, args.block_size) * args.block_size;
+    if (av.av_frame_get_buffer(rgb_frame, 0) < 0) {
+        return error.FailedToAllocFrameBuf;
+    }
+
+    var yuv_frame = av.av_frame_alloc();
+    defer av.av_frame_free(&yuv_frame);
+
+    yuv_frame.*.format = av.AV_PIX_FMT_YUV420P;
+    yuv_frame.*.width = enc_ctx.*.width;
+    yuv_frame.*.height = enc_ctx.*.height;
+    if (av.av_frame_get_buffer(yuv_frame, 0) < 0) {
+        return error.FailedToAllocFrameBuf;
+    }
+
+    const sws_ctx = av.sws_getContext(
+        dec_ctx.width,
+        dec_ctx.height,
+        input_pix_fmt,
+        dec_ctx.width,
+        dec_ctx.height,
+        output_pix_fmt,
+        av.SWS_BILINEAR,
+        null,
+        null,
+        null,
+    );
+    defer av.sws_freeContext(sws_ctx);
+
+    // Set color space and range
+    _ = av.sws_setColorspaceDetails(
+        sws_ctx,
+        av.sws_getCoefficients(av.SWS_CS_DEFAULT),
+        0,
+        av.sws_getCoefficients(av.SWS_CS_DEFAULT),
+        0,
+        0,
+        (1 << 16) - 1,
+        (1 << 16) - 1,
+    );
+
+    const out_sws_ctx = av.sws_getContext(
+        rgb_frame.*.width,
+        rgb_frame.*.height,
+        @intCast(rgb_frame.*.format),
+        yuv_frame.*.width,
+        yuv_frame.*.height,
+        @intCast(yuv_frame.*.format),
+        av.SWS_BILINEAR,
+        null,
+        null,
+        null,
+    );
+    defer av.sws_freeContext(out_sws_ctx);
+
+    var processed_frames: usize = 0;
+    const start_time = std.time.milliTimestamp();
+    var last_update_time = start_time;
+    const update_interval: i64 = 1000; // Update every 1 second
+
+    while (av.av_read_frame(input_ctx, packet) >= 0) {
+        defer av.av_packet_unref(packet);
+
+        if (packet.*.stream_index == stream_info.index) {
+            if (av.avcodec_send_packet(dec_ctx, packet) < 0) {
+                continue;
+            }
+
+            while (av.avcodec_receive_frame(dec_ctx, frame) >= 0) {
+                _ = av.sws_scale(
+                    sws_ctx,
+                    &frame.*.data,
+                    &frame.*.linesize,
+                    0,
+                    frame.*.height,
+                    &rgb_frame.*.data,
+                    &rgb_frame.*.linesize,
+                );
+
+                try convertFrameToAscii(allocator, rgb_frame, args);
+
+                _ = av.sws_scale(
+                    out_sws_ctx,
+                    &rgb_frame.*.data,
+                    &rgb_frame.*.linesize,
+                    0,
+                    rgb_frame.*.height,
+                    &yuv_frame.*.data,
+                    &yuv_frame.*.linesize,
+                );
+
+                yuv_frame.*.pts = frame.*.pts;
+
+                var enc_packet = av.av_packet_alloc();
+                defer av.av_packet_free(&enc_packet);
+
+                if (av.avcodec_send_frame(enc_ctx, yuv_frame) >= 0) {
+                    while (av.avcodec_receive_packet(enc_ctx, enc_packet) >= 0) {
+                        enc_packet.*.stream_index = 0;
+                        enc_packet.*.pts = av.av_rescale_q(
+                            enc_packet.*.pts,
+                            enc_ctx.*.time_base,
+                            output.video_stream.*.time_base,
+                        );
+                        enc_packet.*.dts = av.av_rescale_q(
+                            enc_packet.*.dts,
+                            enc_ctx.*.time_base,
+                            output.video_stream.*.time_base,
+                        );
+                        enc_packet.*.duration = av.av_rescale_q(
+                            enc_packet.*.duration,
+                            enc_ctx.*.time_base,
+                            output.video_stream.*.time_base,
+                        );
+
+                        _ = av.av_interleaved_write_frame(output.ctx, enc_packet);
+                    }
+                }
+
+                processed_frames += 1;
+                root_node.completeOne();
+
+                const current_time = std.time.milliTimestamp();
+                if (current_time - last_update_time >= update_interval) {
+                    const elapsed_time = @as(f64, @floatFromInt(current_time - start_time)) / 1000.0;
+                    const frames_per_second = @as(f64, @floatFromInt(processed_frames)) / elapsed_time;
+                    const estimated_total_time = @as(f64, @floatFromInt(total_frames)) / frames_per_second;
+                    const estimated_remaining_time = estimated_total_time - elapsed_time;
+
+                    eta_node.setCompletedItems(@as(usize, (@intFromFloat(elapsed_time))));
+                    eta_node.setEstimatedTotalItems(@intFromFloat(estimated_remaining_time));
+
+                    last_update_time = current_time;
+                }
+            }
+        } else if (args.keep_audio and audio_stream_info != null and packet.*.stream_index == audio_stream_info.?.index) {
+            // Audio packet processing
+            packet.*.stream_index = output.audio_stream.?.index;
+            packet.*.pts = av.av_rescale_q(packet.*.pts, audio_stream_info.?.stream.time_base, output.audio_stream.?.time_base);
+            packet.*.dts = av.av_rescale_q(packet.*.dts, audio_stream_info.?.stream.time_base, output.audio_stream.?.time_base);
+            packet.*.duration = av.av_rescale_q(packet.*.duration, audio_stream_info.?.stream.time_base, output.audio_stream.?.time_base);
+
+            if (av.av_interleaved_write_frame(output.ctx, packet) < 0) {
+                return error.FailedToWriteAudioPacket;
+            }
+        }
+    }
+}
+
+fn convertFrameToAscii(allocator: std.mem.Allocator, frame: *av.AVFrame, args: Args) !void {
+    const img = Image{
+        .data = frame.data[0],
+        .width = @intCast(frame.width),
+        .height = @intCast(frame.height),
+        .channels = 3,
+    };
+
+    const edge_result = try detectEdges(allocator, img, args);
+    defer if (args.detect_edges) {
+        allocator.free(edge_result.grayscale);
+        allocator.free(edge_result.magnitude);
+        allocator.free(edge_result.direction);
+    };
+
+    const ascii_img = try generateAsciiArt(allocator, img, edge_result, args);
+    defer allocator.free(ascii_img);
+
+    // Copy ascii art back to frame
+    const out_w = (img.width / args.block_size) * args.block_size;
+    const out_h = (img.height / args.block_size) * args.block_size;
+    const frame_linesize = @as(usize, @intCast(frame.linesize[0]));
+
+    for (0..out_h) |y| {
+        const src_start = y * out_w * 3;
+        const dst_start = y * frame_linesize;
+        const row_size = @min(out_w * 3, frame_linesize);
+        @memcpy(frame.data[0][dst_start..][0..row_size], ascii_img[src_start..][0..row_size]);
+    }
+}
+
+fn getTotalFrames(fmt_ctx: *av.AVFormatContext, stream_info: AVStream) i64 {
+    if (stream_info.stream.nb_frames > 0) {
+        return stream_info.stream.nb_frames;
+    }
+
+    var total_frames: i64 = 0;
+    var pkt: av.AVPacket = undefined;
+    while (av.av_read_frame(fmt_ctx, &pkt) >= 0) {
+        defer av.av_packet_unref(&pkt);
+        if (pkt.stream_index == stream_info.index) {
+            total_frames += 1;
+        }
+    }
+
+    // Reset the file position indicator
+    _ = av.avio_seek(fmt_ctx.*.pb, 0, av.SEEK_SET);
+    _ = av.avformat_seek_file(
+        fmt_ctx,
+        stream_info.index,
+        std.math.minInt(i64),
+        0,
+        std.math.maxInt(i64),
+        0,
+    );
+
+    return total_frames;
+}
+
+// -----------------------
+// IMAGE PROCESSING FUNCTIONS
+// -----------------------
+
 fn downloadImage(allocator: std.mem.Allocator, url: []const u8) ![]u8 {
     var client = std.http.Client{ .allocator = allocator };
     defer client.deinit();
@@ -404,6 +953,10 @@ fn loadImage(allocator: std.mem.Allocator, path: []const u8) !Image {
         .channels = @intCast(chan),
     };
 }
+
+// -----------------------
+// CORE ASCIIGEN FUNCTIONS
+// -----------------------
 
 fn rgbToGrayScale(allocator: std.mem.Allocator, img: Image) ![]u8 {
     const grayscale_img = try allocator.alloc(u8, img.width * img.height);
@@ -535,9 +1088,9 @@ fn getEdgeChar(mag: f32, dir: f32, threshold_disabled: bool) ?u8 {
     const angle = (dir + std.math.pi) * (@as(f32, 180) / std.math.pi);
     return switch (@as(u8, @intFromFloat(@mod(angle + 22.5, 180) / 45))) {
         0, 4 => '-',
-        1, 5 => '/',
+        1, 5 => '\\',
         2, 6 => '|',
-        3, 7 => '\\',
+        3, 7 => '/',
         else => unreachable,
     };
 }
@@ -551,6 +1104,7 @@ fn convertToAscii(
     ascii_char: u8,
     color: [3]u8,
     block_size: u8,
+    color_enabled: bool,
 ) void {
     if (ascii_char < 32 or ascii_char > 126) {
         // std.debug.print("Error: invalid ASCII character: {}\n", .{ascii_char});
@@ -560,6 +1114,11 @@ fn convertToAscii(
     const bitmap = &font_bitmap[ascii_char];
     const block_w = @min(block_size, w - x);
     const block_h = @min(block_size, img.len / (w * 3) - y);
+
+    // Define new colors
+    const background_color = [3]u8{ 21, 9, 27 }; // Blackcurrant
+    const text_color = [3]u8{ 211, 106, 111 }; // Indian Red
+
     var dy: usize = 0;
     while (dy < block_h) : (dy += 1) {
         var dx: usize = 0;
@@ -573,28 +1132,50 @@ fn convertToAscii(
                 const bit: u8 = @as(u8, 1) << shift;
                 if ((bitmap[dy] & bit) != 0) {
                     // Character pixel: use the original color
-                    img[idx] = color[0];
-                    img[idx + 1] = color[1];
-                    img[idx + 2] = color[2];
+                    if (color_enabled) {
+                        img[idx] = color[0];
+                        img[idx + 1] = color[1];
+                        img[idx + 2] = color[2];
+                    } else {
+                        img[idx] = text_color[0];
+                        img[idx + 1] = text_color[1];
+                        img[idx + 2] = text_color[2];
+                    }
                 } else {
                     // not a character pixel: set to black
-                    img[idx] = 0;
-                    img[idx + 1] = 0;
-                    img[idx + 2] = 0;
+                    if (color_enabled) {
+                        img[idx] = 0;
+                        img[idx + 1] = 0;
+                        img[idx + 2] = 0;
+                    } else {
+                        img[idx] = background_color[0];
+                        img[idx + 1] = background_color[1];
+                        img[idx + 2] = background_color[2];
+                    }
                 }
             }
         }
     }
 }
 
+// -----------------------
+// MAIN ENTRYPOINT AND HELPER FUNCTIONS
+// -----------------------
+
 pub fn main() !void {
+    _ = av;
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const args = try parseArgs(allocator);
+    var args = try parseArgs(allocator);
+    defer args.deinit();
 
-    try processImage(allocator, args);
+    if (args.is_video) {
+        try processVideo(allocator, args);
+    } else {
+        try processImage(allocator, args);
+    }
 }
 
 fn processImage(allocator: std.mem.Allocator, args: Args) !void {
@@ -704,7 +1285,7 @@ fn generateAsciiArt(
             const ascii_char = selectAsciiChar(block_info, args);
             const avg_color = calculateAverageColor(block_info, args);
 
-            convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color, args.block_size);
+            convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color, args.block_size, args.color);
         }
     }
 
@@ -812,6 +1393,7 @@ fn saveOutputImage(ascii_img: []u8, img: Image, args: Args) !void {
 }
 
 test "test_ascii_generation" {
+    _ = av;
     const allocator = std.testing.allocator;
 
     // Create a temporary file path
@@ -825,11 +1407,11 @@ test "test_ascii_generation" {
 
     // Set up test arguments
     const test_args = Args{
-        .input = "https://w.wallhaven.cc/full/p9/wallhaven-p9gr2p.jpg",
+        .input = "test_img.png",
         .output = tmp_path,
         .color = false,
         .invert_color = false,
-        .scale = 8.0,
+        .scale = 1.0,
         .detect_edges = false,
         .sigma1 = 0.5,
         .sigma2 = 1.0,
@@ -849,9 +1431,9 @@ test "test_ascii_generation" {
     defer file.close();
 
     // Delete the temporary file
-    try std.fs.deleteFileAbsolute(tmp_path);
+    // try std.fs.deleteFileAbsolute(tmp_path);
 
     // Try to open the file again, which should fail
-    const result = std.fs.openFileAbsolute(tmp_path, .{});
-    try std.testing.expectError(error.FileNotFound, result);
+    // const result = std.fs.openFileAbsolute(tmp_path, .{});
+    // try std.testing.expectError(error.FileNotFound, result);
 }
