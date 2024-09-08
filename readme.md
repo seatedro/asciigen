@@ -4,6 +4,24 @@ converts images/video to ascii art
 
 ## installation
 
+make sure you have ffmpeg installed (along with the respective headers)
+
+usually on linux you just install the headers like so:
+```bash
+sudo apt-get install libavutil-dev libavformat-dev libavcodec-dev libswscale-dev
+```
+
+on macos you would do
+```bash
+brew install ffmpeg
+```
+
+on windows:
+```bash
+choco install ffmpeg-full
+```
+
+
 ### i'm not doing pre-built binaries
 
 it is getting too annoying to handle cross plat binary releases using my apple silicon mac. just build from source.
