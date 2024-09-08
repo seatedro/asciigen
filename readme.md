@@ -48,8 +48,8 @@ run the program with the following options (the default zig install directory is
    ```
 1. options:
    - `-h, --help`: print the help message and exit
-   - `-i, --input <file>`: specify the input image file path (local path/URL) (required)
-   - `-o, --output <file>`: specify the output image file (optional, default: `<input>_ascii.jpg`)
+   - `-i, --input <file>`: specify the input media file path (local path/URL) (required)
+   - `-o, --output <file>`: specify the output media file (required)
    - `-c, --color`: use color ascii characters (optional)
    - `-n, --invert_color`: Inverts the color values (optional)
    - `-s, --scale <float>`: set the downscale or upscale factor (optional, default: 1)
@@ -57,9 +57,9 @@ run the program with the following options (the default zig install directory is
    - `    --sigma1 <float>`: set the sigma1 value for DoG filter (optional, default: 0.3)
    - `    --sigma2 <float>`: set the sigma2 value for DoG filter (optional, default: 1.0)
    - `-b, --brightness_boost <float>`: increase/decrease perceived brightness (optional, default: 1.0)
-   advanced options (your image will break, probably, but you might get some cool results):
-   - `    --full_characters`: Uses full spectrum of characters in image.
-   - `    --ascii_chars <string>`: Use what characters you want to use in the image. (default: " .:-=+*%@#")
+   advanced options:
+   - `    --full_characters`: Uses all ascii characters in generated output.
+   - `    --ascii_chars <string>`: Use what characters you want to use in the generated output. (default: " .:-=+*%@#")
    - `    --disable_sort`: Prevents sorting of the ascii_chars by size.
    - `    --block_size <u8>`: Set the size of the blocks. (default: 8)
    - `    --threshold_disabled`: Disables the threshold.
