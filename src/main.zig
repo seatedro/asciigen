@@ -1,6 +1,8 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const clap = @import("clap");
 const mime = @import("mime.zig");
+const term = @import("term.zig");
 // const stb = @import("stb");
 const stb = @cImport({
     @cInclude("stb_image.h");
@@ -157,7 +159,7 @@ const font_bitmap: [128][8]u8 = .{
 
 const Args = struct {
     input: []const u8,
-    output: []const u8,
+    output: ?[]const u8,
     color: bool,
     invert_color: bool,
     scale: f32,
@@ -187,6 +189,13 @@ const Args = struct {
 
 const Image = struct {
     data: [*]u8,
+    width: usize,
+    height: usize,
+    channels: usize,
+};
+
+const Frame = struct {
+    data: []u8,
     width: usize,
     height: usize,
     channels: usize,
@@ -259,13 +268,14 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
 
     return Args{
         .input = res.args.input.?,
-        .output = res.args.output orelse blk: {
-            var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-            const current_dir = try std.fs.cwd().realpath(".", &buf);
-            const input_path = std.fs.path.basename(res.args.input.?);
-            const output_filename = std.fmt.allocPrint(std.heap.page_allocator, "{s}_ascii.jpg", .{input_path}) catch unreachable;
-            break :blk std.fs.path.join(allocator, &.{ current_dir, output_filename }) catch unreachable;
-        },
+        // .output = res.args.output orelse blk: {
+        //     var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+        //     const current_dir = try std.fs.cwd().realpath(".", &buf);
+        //     const input_path = std.fs.path.basename(res.args.input.?);
+        //     const output_filename = std.fmt.allocPrint(std.heap.page_allocator, "{s}_ascii.jpg", .{input_path}) catch unreachable;
+        //     break :blk std.fs.path.join(allocator, &.{ current_dir, output_filename }) catch unreachable;
+        // },
+        .output = res.args.output,
         .color = res.args.color != 0,
         .invert_color = res.args.invert_color != 0,
         .scale = res.args.scale orelse 1.0,
@@ -344,6 +354,7 @@ fn sortCharsBySize(allocator: std.mem.Allocator, input: []const u8) ![]const u8 
     // Convert []u8 to []const u8 before returning
     return result[0..];
 }
+
 // -----------------------
 // VIDEO PROCESSING FUNCTIONS
 // -----------------------
@@ -582,6 +593,12 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
     var enc_ctx = try createEncoder(dec_ctx, stream_info.stream, args);
     defer av.avcodec_free_context(@ptrCast(&enc_ctx));
 
+    // Extract frame rate
+    const frame_rate = @as(f64, @floatFromInt(stream_info.stream.*.r_frame_rate.num)) /
+        @as(f64, @floatFromInt(stream_info.stream.*.r_frame_rate.den));
+    const frame_delay_ns = @as(u64, @intFromFloat(1_000_000_000.0 / frame_rate));
+    std.debug.print("FPS: {d}, FrameDelay: {d}\n", .{ frame_rate, frame_delay_ns });
+
     var audio_stream_info: ?AVStream = null;
     if (args.keep_audio) {
         audio_stream_info = openAudioStream(input_ctx) catch |err| blk: {
@@ -594,26 +611,38 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
         };
     }
 
-    var output = try createOutputCtx(args.output, enc_ctx, if (audio_stream_info) |asi| asi.stream else null);
-    defer {
-        _ = av.av_write_trailer(output.ctx);
-        if ((output.ctx.oformat.*.flags & av.AVFMT_NOFILE) == 0) {
-            _ = av.avio_closep(&output.ctx.pb);
-        }
-        av.avformat_free_context(output.ctx);
+    var op: ?OutputContext = null;
+    var t: term = undefined;
+    var frames = std.ArrayList(Image).init(allocator);
+    if (args.output) |output| {
+        op = try createOutputCtx(output, enc_ctx, if (audio_stream_info) |asi| asi.stream else null);
+        // Set up progress bar
+    } else {
+        t = try term.init(allocator, args.ascii_chars);
     }
-
+    defer {
+        if (op) |output| {
+            _ = av.av_write_trailer(output.ctx);
+            if ((output.ctx.oformat.*.flags & av.AVFMT_NOFILE) == 0) {
+                _ = av.avio_closep(&output.ctx.pb);
+            }
+            av.avformat_free_context(output.ctx);
+        } else {
+            t.deinit();
+        }
+        for (frames.items) |f| {
+            const img_len = f.height * f.width * f.channels;
+            allocator.free(f.data[0..img_len]);
+        }
+        frames.deinit();
+    }
+    //
     // Get total frames
     const total_frames: usize = @intCast(getTotalFrames(input_ctx, stream_info));
-
-    // Set up progress bar
     var progress = std.Progress.start(.{});
-    const root_node = progress.start("Processing video", total_frames);
-    defer root_node.end();
-
+    var root_node = progress.start("Processing video", total_frames);
     // Create a child node for ETA
     var eta_node = progress.start("(time elapsed (s)/time remaining(s))", 100);
-    defer eta_node.end();
 
     var packet = av.av_packet_alloc();
     defer av.av_packet_free(&packet);
@@ -659,6 +688,30 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
         null,
     );
     defer av.sws_freeContext(sws_ctx);
+
+    var term_ctx: ?*av.struct_SwsContext = undefined;
+    var term_frame: *av.struct_AVFrame = undefined;
+    if (op == null) {
+        term_ctx = av.sws_getContext(
+            dec_ctx.width,
+            dec_ctx.height,
+            output_pix_fmt,
+            @intCast(t.size.w),
+            @intCast(t.size.h),
+            output_pix_fmt,
+            av.SWS_BILINEAR,
+            null,
+            null,
+            null,
+        );
+        term_frame = av.av_frame_alloc();
+    }
+    defer {
+        if (op == null) {
+            av.sws_freeContext(term_ctx.?);
+            av.av_frame_free(&rgb_frame);
+        }
+    }
 
     // Set color space and range
     _ = av.sws_setColorspaceDetails(
@@ -709,47 +762,61 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
                     &rgb_frame.*.data,
                     &rgb_frame.*.linesize,
                 );
+                if (op) |output| {
+                    try convertFrameToAscii(allocator, rgb_frame, args);
+                    _ = av.sws_scale(
+                        out_sws_ctx,
+                        &rgb_frame.*.data,
+                        &rgb_frame.*.linesize,
+                        0,
+                        rgb_frame.*.height,
+                        &yuv_frame.*.data,
+                        &yuv_frame.*.linesize,
+                    );
 
-                try convertFrameToAscii(allocator, rgb_frame, args);
+                    yuv_frame.*.pts = frame.*.pts;
 
-                _ = av.sws_scale(
-                    out_sws_ctx,
-                    &rgb_frame.*.data,
-                    &rgb_frame.*.linesize,
-                    0,
-                    rgb_frame.*.height,
-                    &yuv_frame.*.data,
-                    &yuv_frame.*.linesize,
-                );
+                    var enc_packet = av.av_packet_alloc();
+                    defer av.av_packet_free(&enc_packet);
 
-                yuv_frame.*.pts = frame.*.pts;
+                    if (av.avcodec_send_frame(enc_ctx, yuv_frame) >= 0) {
+                        while (av.avcodec_receive_packet(enc_ctx, enc_packet) >= 0) {
+                            enc_packet.*.stream_index = 0;
+                            enc_packet.*.pts = av.av_rescale_q(
+                                enc_packet.*.pts,
+                                enc_ctx.*.time_base,
+                                output.video_stream.*.time_base,
+                            );
+                            enc_packet.*.dts = av.av_rescale_q(
+                                enc_packet.*.dts,
+                                enc_ctx.*.time_base,
+                                output.video_stream.*.time_base,
+                            );
+                            enc_packet.*.duration = av.av_rescale_q(
+                                enc_packet.*.duration,
+                                enc_ctx.*.time_base,
+                                output.video_stream.*.time_base,
+                            );
 
-                var enc_packet = av.av_packet_alloc();
-                defer av.av_packet_free(&enc_packet);
-
-                if (av.avcodec_send_frame(enc_ctx, yuv_frame) >= 0) {
-                    while (av.avcodec_receive_packet(enc_ctx, enc_packet) >= 0) {
-                        enc_packet.*.stream_index = 0;
-                        enc_packet.*.pts = av.av_rescale_q(
-                            enc_packet.*.pts,
-                            enc_ctx.*.time_base,
-                            output.video_stream.*.time_base,
-                        );
-                        enc_packet.*.dts = av.av_rescale_q(
-                            enc_packet.*.dts,
-                            enc_ctx.*.time_base,
-                            output.video_stream.*.time_base,
-                        );
-                        enc_packet.*.duration = av.av_rescale_q(
-                            enc_packet.*.duration,
-                            enc_ctx.*.time_base,
-                            output.video_stream.*.time_base,
-                        );
-
-                        _ = av.av_interleaved_write_frame(output.ctx, enc_packet);
+                            _ = av.av_interleaved_write_frame(output.ctx, enc_packet);
+                        }
                     }
-                }
+                } else {
+                    const frame_size = @as(usize, @intCast(rgb_frame.*.width)) * @as(usize, @intCast(rgb_frame.*.height)) * 3;
+                    const frame_data = try allocator.alloc(u8, frame_size);
+                    defer allocator.free(frame_data);
+                    @memcpy(frame_data, rgb_frame.*.data[0][0..frame_size]);
 
+                    const f = Image{
+                        .data = frame_data.ptr,
+                        .width = @intCast(rgb_frame.*.width),
+                        .height = @intCast(rgb_frame.*.height),
+                        .channels = 3,
+                    };
+                    const resized_img = try resizeImage(f, t.size.w, t.size.h - 4);
+
+                    try frames.append(resized_img);
+                }
                 processed_frames += 1;
                 root_node.completeOne();
 
@@ -768,6 +835,7 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
             }
         } else if (args.keep_audio and audio_stream_info != null and packet.*.stream_index == audio_stream_info.?.index) {
             // Audio packet processing
+            const output = op.?;
             packet.*.stream_index = output.audio_stream.?.index;
             packet.*.pts = av.av_rescale_q(packet.*.pts, audio_stream_info.?.stream.time_base, output.audio_stream.?.time_base);
             packet.*.dts = av.av_rescale_q(packet.*.dts, audio_stream_info.?.stream.time_base, output.audio_stream.?.time_base);
@@ -776,6 +844,46 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
             if (av.av_interleaved_write_frame(output.ctx, packet) < 0) {
                 return error.FailedToWriteAudioPacket;
             }
+        }
+    }
+
+    root_node.end();
+    eta_node.end();
+
+    if (args.output == null) {
+        t.stats = .{
+            .original_w = @intCast(dec_ctx.width),
+            .original_h = @intCast(dec_ctx.height),
+            .new_w = t.size.w,
+            .new_h = t.size.h - 4,
+        };
+
+        try t.enableAsciiMode();
+        defer t.disableAsciiMode() catch {};
+
+        try t.clear();
+
+        var frame_count: usize = 0;
+        const term_start_time = std.time.milliTimestamp();
+
+        for (frames.items) |f| {
+            const current_time = std.time.milliTimestamp();
+
+            defer stb.stbi_image_free(f.data);
+
+            const img_len = f.height * f.width * f.channels;
+
+            frame_count += 1;
+            const elapsed_seconds = @as(f32, @floatFromInt(current_time - term_start_time)) / 1000.0;
+            t.stats.fps = @as(f32, @floatFromInt(frame_count)) / elapsed_seconds;
+
+            try t.renderAsciiArt(
+                f.data[0..img_len],
+                f.width,
+                f.height,
+                f.channels,
+                args.color,
+            );
         }
     }
 }
@@ -1189,10 +1297,41 @@ fn processImage(allocator: std.mem.Allocator, args: Args) !void {
         allocator.free(edge_result.direction);
     };
 
-    const ascii_img = try generateAsciiArt(allocator, original_img, edge_result, args);
-    defer allocator.free(ascii_img);
+    if (args.output) |_| {
+        const ascii_img = try generateAsciiArt(allocator, original_img, edge_result, args);
+        defer allocator.free(ascii_img);
+        try saveOutputImage(ascii_img, original_img, args);
+    } else {
+        var t = try term.init(allocator, args.ascii_chars);
+        defer t.deinit();
 
-    try saveOutputImage(ascii_img, original_img, args);
+        // const ascii_size = t.calculateAsciiDimensions(original_img.width, original_img.height);
+
+        const resized_img = try resizeImage(original_img, t.size.w - 2, t.size.h - 4);
+        defer stb.stbi_image_free(resized_img.data);
+
+        t.stats = .{
+            .original_w = original_img.width,
+            .original_h = original_img.height,
+            .new_w = resized_img.width,
+            .new_h = resized_img.height,
+        };
+
+        const img_len = resized_img.height * resized_img.width * resized_img.channels;
+
+        try t.enableAsciiMode();
+        try t.renderAsciiArt(
+            resized_img.data[0..img_len],
+            resized_img.width,
+            resized_img.height,
+            resized_img.channels,
+            args.color,
+        );
+
+        // Wait for user input before exiting
+        _ = try t.stdin.readByte();
+        try t.disableAsciiMode();
+    }
 }
 
 fn loadAndScaleImage(allocator: std.mem.Allocator, args: Args) !Image {
@@ -1232,6 +1371,35 @@ fn scaleImage(img: Image, scale: f32) !Image {
         .data = scaled_img,
         .width = img_w,
         .height = img_h,
+        .channels = img.channels,
+    };
+}
+
+fn resizeImage(
+    img: Image,
+    new_width: usize,
+    new_height: usize,
+) !Image {
+    const resized_data = stb.stbir_resize_uint8_linear(
+        img.data,
+        @intCast(img.width),
+        @intCast(img.height),
+        0,
+        0,
+        @intCast(new_width),
+        @intCast(new_height),
+        0,
+        @intCast(img.channels),
+    );
+
+    if (resized_data == null) {
+        return error.ImageResizeFailed;
+    }
+
+    return Image{
+        .data = resized_data,
+        .width = new_width,
+        .height = new_height,
         .channels = img.channels,
     };
 }
@@ -1379,7 +1547,7 @@ fn saveOutputImage(ascii_img: []u8, img: Image, args: Args) !void {
     const out_h = (img.height / args.block_size) * args.block_size;
 
     const save_result = stb.stbi_write_png(
-        @ptrCast(args.output.ptr),
+        @ptrCast(args.output.?.ptr),
         @intCast(out_w),
         @intCast(out_h),
         @intCast(img.channels),
