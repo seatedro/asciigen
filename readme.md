@@ -1,4 +1,4 @@
-# ascii from image
+# ascii from media
 
 converts images/video to ascii art
 
