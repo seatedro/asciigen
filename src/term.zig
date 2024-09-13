@@ -12,6 +12,10 @@ pub const Stats = struct {
     new_w: usize,
     new_h: usize,
     fps: ?f32 = null,
+    frame_delay: ?i64 = null,
+    avg_frame_time: ?u128 = null,
+    frame_count: ?u64 = null,
+    total_time: ?u128 = 0,
 };
 
 const MAX_COLOR = 256;
@@ -42,7 +46,7 @@ const BLACK_BG = CSI ++ SET_BG_COLOR ++ ";0m";
 const BLACK_FG = CSI ++ SET_FG_COLOR ++ ";0m";
 const OG_COLOR = BLACK_BG ++ WHITE_FG;
 
-const ASCII_TERM_ON = ALT_BUF_ENABLE ++ HIDE_CURSOR ++ HOME_CURSOR ++ CLEAR_SCREEN ++ RESET_COLOR;
+const ASCII_TERM_ON = ALT_BUF_ENABLE ++ HIDE_CURSOR ++ HOME_CURSOR ++ CLEAR_SCREEN;
 const ASCII_TERM_OFF = ALT_BUF_DISABLE ++ SHOW_CURSOR ++ "\n";
 
 // RGB ANSI escape codes
@@ -177,25 +181,34 @@ pub fn drawBuf(self: *Self, s: []const u8) void {
     }
 }
 
-pub fn renderAsciiArt(self: *Self, img: []const u8, width: usize, height: usize, channels: usize, color: bool) !void {
+pub fn renderAsciiArt(
+    self: *Self,
+    img: []const u8,
+    width: usize,
+    height: usize,
+    channels: usize,
+    color: bool,
+    invert: bool,
+) !void {
     const v_padding: usize = (self.size.h - height - 1) / 2; // Account for top and bottom borders
-    // const h_padding: usize = (self.size.w - width - 2) / 2; // Account for left and right borders
 
-    self.resetBuffer();
-    self.writeToBuffer(self.init_frame);
-
-    // Print top padding
     var i: usize = 0;
+    self.writeToBuffer(self.init_frame);
+    if (!color) {
+        self.writeToBuffer(WHITE_FG);
+    }
+    // Print top padding
+    // TODO: v_padding is comptime, so replace it with buffer alloc
     while (i < v_padding) : (i += 1) {
         self.writeToBuffer("\n");
     }
-
     // Print top border
     // for (0..h_padding) |_| self.writeToBuffer(" ");
     // self.writeToBuffer("┌");
     // for (0..width) |_| self.writeToBuffer("-");
     // self.writeToBuffer("┐\n");
 
+    var timer = try std.time.Timer.start();
     var y: usize = 0;
     while (y < height) : (y += 1) {
         // for (0..h_padding) |_| self.writeToBuffer(" ");
@@ -205,15 +218,24 @@ pub fn renderAsciiArt(self: *Self, img: []const u8, width: usize, height: usize,
         while (x < width) : (x += 1) {
             const idx = (y * width + x) * channels;
 
-            const brightness = img[idx];
+            const brightness = if (invert) 255 - img[idx] else img[idx];
             const ascii_char = self.ascii_chars[brightness * self.ascii_chars.len / 256];
 
             if (color) {
-                const r = img[idx];
-                const g = img[idx + 1];
-                const b = img[idx + 2];
-                const color_code = try std.fmt.allocPrint(self.allocator, RGB_FG ++ "{d};{d};{d}m{c}" ++ RESET_COLOR, .{ r, g, b, ascii_char });
-                defer self.allocator.free(color_code);
+                var r = img[idx];
+                var g = img[idx + 1];
+                var b = img[idx + 2];
+                if (invert) {
+                    r = 255 - r;
+                    g = 255 - g;
+                    b = 255 - b;
+                }
+                var color_code_buf: [32]u8 = undefined;
+                const color_code = std.fmt.bufPrint(
+                    &color_code_buf,
+                    RGB_FG ++ "{d};{d};{d}m{c}" ++ RESET_COLOR,
+                    .{ r, g, b, ascii_char },
+                ) catch unreachable;
                 self.writeToBuffer(color_code);
             } else {
                 self.writeToBuffer(&[_]u8{ascii_char});
@@ -224,6 +246,10 @@ pub fn renderAsciiArt(self: *Self, img: []const u8, width: usize, height: usize,
         self.writeToBuffer("\n");
     }
 
+    const elapsed = timer.read();
+    self.stats.total_time.? += @as(u128, @intCast(elapsed));
+
+    try self.flushBuffer();
     // Print bottom border
     // for (0..h_padding) |_| self.writeToBuffer(" ");
     // self.writeToBuffer("└");
@@ -254,8 +280,8 @@ pub fn printStats(self: *Self) !void {
     const original_aspect_ratio = @as(f32, @floatFromInt(self.stats.original_w)) / @as(f32, @floatFromInt(self.stats.original_h));
     const new_aspect_ratio = @as(f32, @floatFromInt(self.stats.new_w)) / @as(f32, @floatFromInt(self.stats.new_h));
 
-    const stats_str = if (self.stats.fps) |fps|
-        try std.fmt.allocPrint(self.allocator, "\nOriginal: {}x{} (AR: {d:.2}) | New: {}x{} (AR: {d:.2}) | FPS: {d:.2}", .{
+    const stats_str = if (self.stats.fps) |fps| blk: {
+        const s = try std.fmt.allocPrint(self.allocator, "\nOriginal: {}x{} (AR: {d:.2}) | New: {}x{} (AR: {d:.2}) | FPS: {d:.2} | Frame Delay: {d}", .{
             self.stats.original_w,
             self.stats.original_h,
             original_aspect_ratio,
@@ -263,18 +289,19 @@ pub fn printStats(self: *Self) !void {
             self.stats.new_h,
             new_aspect_ratio,
             fps,
-        })
-    else
-        try std.fmt.allocPrint(self.allocator, "\nOriginal: {}x{} (AR: {d:.2}) | New: {}x{} (AR: {d:.2}) | Term: {}x{} |", .{
-            self.stats.original_w,
-            self.stats.original_h,
-            original_aspect_ratio,
-            self.stats.new_w,
-            self.stats.new_h,
-            new_aspect_ratio,
-            self.size.w,
-            self.size.h,
+            self.stats.frame_delay.?,
         });
+        break :blk s;
+    } else try std.fmt.allocPrint(self.allocator, "\nOriginal: {}x{} (AR: {d:.2}) | New: {}x{} (AR: {d:.2}) | Term: {}x{} |", .{
+        self.stats.original_w,
+        self.stats.original_h,
+        original_aspect_ratio,
+        self.stats.new_w,
+        self.stats.new_h,
+        new_aspect_ratio,
+        self.size.w,
+        self.size.h,
+    });
     defer self.allocator.free(stats_str);
 
     self.writeToBuffer(stats_str);

@@ -157,6 +157,13 @@ const font_bitmap: [128][8]u8 = .{
     .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+007F
 };
 
+const OutputType = enum {
+    Stdout,
+    Text,
+    Image,
+    Video,
+};
+
 const Args = struct {
     input: []const u8,
     output: ?[]const u8,
@@ -175,7 +182,8 @@ const Args = struct {
     codec: ?[]const u8,
     keep_audio: bool,
     ffmpeg_options: std.StringHashMap([]const u8),
-    is_video: bool,
+    stretched: bool,
+    output_type: OutputType,
 
     pub fn deinit(self: *Args) void {
         var it = self.ffmpeg_options.iterator();
@@ -209,8 +217,8 @@ const SobelFilter = struct {
 fn parseArgs(allocator: std.mem.Allocator) !Args {
     const params = comptime clap.parseParamsComptime(
         \\-h, --help                     Print this help message and exit
-        \\-i, --input <str>              Input image file
-        \\-o, --output <str>             Output image file
+        \\-i, --input <str>              Input media file (img, video)
+        \\-o, --output <str>             Output file (img, video, txt)
         \\-c, --color                    Use color ASCII characters
         \\-n, --invert_color             Inverts the color values
         \\-s, --scale <f32>              Scale factor (default: 1.0)
@@ -225,6 +233,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         \\    --threshold_disabled       Disables the threshold.
         \\    --codec <str>              Encoder Codec like "libx264" or "hevc_videotoolbox" (optional)
         \\    --keep_audio               Keeps the audio if input is a video
+        \\    --stretched                Resizes media to fit terminal window
         \\<str>...
     );
 
@@ -248,14 +257,23 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         std.process.exit(1);
     }
 
-    const is_video = isVideoFile(res.args.input.?);
+    const output_type = if (res.args.output) |op| blk: {
+        const ext = std.fs.path.extension(op);
+        if (std.mem.eql(u8, ext, ".txt")) {
+            break :blk OutputType.Text;
+        } else if (isVideoFile(op)) {
+            break :blk OutputType.Video;
+        } else {
+            break :blk OutputType.Image;
+        }
+    } else OutputType.Stdout;
 
     var ffmpeg_options = std.StringHashMap([]const u8).init(allocator);
     errdefer ffmpeg_options.deinit();
     var pos: usize = 0;
     while (pos < res.positionals.len) : (pos += 2) {
-        if (!is_video) {
-            std.debug.print("Warning: You have passed ffmpeg options for an image input, they will be ignored.\n", .{});
+        if (output_type != OutputType.Video) {
+            std.debug.print("Warning: You have passed options not meant for this input/output type, they will be ignored.\n", .{});
             break;
         }
         const positional = res.positionals[pos];
@@ -268,13 +286,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
 
     return Args{
         .input = res.args.input.?,
-        // .output = res.args.output orelse blk: {
-        //     var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-        //     const current_dir = try std.fs.cwd().realpath(".", &buf);
-        //     const input_path = std.fs.path.basename(res.args.input.?);
-        //     const output_filename = std.fmt.allocPrint(std.heap.page_allocator, "{s}_ascii.jpg", .{input_path}) catch unreachable;
-        //     break :blk std.fs.path.join(allocator, &.{ current_dir, output_filename }) catch unreachable;
-        // },
+        .output_type = output_type,
         .output = res.args.output,
         .color = res.args.color != 0,
         .invert_color = res.args.invert_color != 0,
@@ -307,7 +319,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         .codec = res.args.codec,
         .keep_audio = res.args.keep_audio != 0,
         .ffmpeg_options = ffmpeg_options,
-        .is_video = is_video,
+        .stretched = res.args.stretched != 0,
     };
 }
 
@@ -850,6 +862,7 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
     root_node.end();
     eta_node.end();
 
+    var term_start_time: i64 = undefined;
     if (args.output == null) {
         t.stats = .{
             .original_w = @intCast(dec_ctx.width),
@@ -864,18 +877,19 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
         try t.clear();
 
         var frame_count: usize = 0;
-        const term_start_time = std.time.milliTimestamp();
+        term_start_time = std.time.milliTimestamp();
+        var prev_frame_time = std.time.milliTimestamp();
 
         for (frames.items) |f| {
             const current_time = std.time.milliTimestamp();
-
-            defer stb.stbi_image_free(f.data);
 
             const img_len = f.height * f.width * f.channels;
 
             frame_count += 1;
             const elapsed_seconds = @as(f32, @floatFromInt(current_time - term_start_time)) / 1000.0;
+            t.stats.frame_count = frame_count;
             t.stats.fps = @as(f32, @floatFromInt(frame_count)) / elapsed_seconds;
+            t.stats.frame_delay = current_time - prev_frame_time;
 
             try t.renderAsciiArt(
                 f.data[0..img_len],
@@ -883,9 +897,21 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
                 f.height,
                 f.channels,
                 args.color,
+                args.invert_color,
             );
+            prev_frame_time = current_time;
+            std.time.sleep(33 * std.time.ns_per_ms);
+        }
+
+        for (frames.items) |f| {
+            stb.stbi_image_free(f.data);
         }
     }
+
+    const avg_time = t.stats.total_time.? / @as(u128, t.stats.frame_count.?);
+    t.stats.avg_frame_time = avg_time;
+    std.debug.print("Average time for loop: {d}\n", .{t.stats.avg_frame_time.? / 1_000_000});
+    std.debug.print("Total Time rendering: {d}\n", .{std.time.milliTimestamp() - term_start_time});
 }
 
 fn convertFrameToAscii(allocator: std.mem.Allocator, frame: *av.AVFrame, args: Args) !void {
@@ -1279,10 +1305,9 @@ pub fn main() !void {
     var args = try parseArgs(allocator);
     defer args.deinit();
 
-    if (args.is_video) {
-        try processVideo(allocator, args);
-    } else {
-        try processImage(allocator, args);
+    switch (args.output_type) {
+        OutputType.Video => try processVideo(allocator, args),
+        else => try processImage(allocator, args),
     }
 }
 
@@ -1297,41 +1322,107 @@ fn processImage(allocator: std.mem.Allocator, args: Args) !void {
         allocator.free(edge_result.direction);
     };
 
-    if (args.output) |_| {
-        const ascii_img = try generateAsciiArt(allocator, original_img, edge_result, args);
-        defer allocator.free(ascii_img);
-        try saveOutputImage(ascii_img, original_img, args);
-    } else {
-        var t = try term.init(allocator, args.ascii_chars);
-        defer t.deinit();
+    switch (args.output_type) {
+        OutputType.Image => {
+            const ascii_img = try generateAsciiArt(allocator, original_img, edge_result, args);
+            defer allocator.free(ascii_img);
+            try saveOutputImage(ascii_img, original_img, args);
+        },
+        OutputType.Stdout => {
+            var t = try term.init(allocator, args.ascii_chars);
+            defer t.deinit();
 
-        // const ascii_size = t.calculateAsciiDimensions(original_img.width, original_img.height);
+            var img: Image = undefined;
+            if (args.stretched) {
+                img = try resizeImage(original_img, t.size.w - 2, t.size.h - 4);
+            } else {
+                var new_w: usize = 0;
+                var new_h: usize = 0;
+                const rw = original_img.width / (t.size.w - 2);
+                const rh = original_img.height / (t.size.h - 4);
+                if (rw > rh) {
+                    new_h = original_img.height / (rw * 2);
+                    new_w = t.size.w - 2;
+                } else {
+                    new_h = (t.size.h - 4) / 2;
+                    new_w = original_img.width / rh;
+                }
+                img = try resizeImage(original_img, new_w, new_h);
+            }
+            defer if (args.stretched) stb.stbi_image_free(img.data);
 
-        const resized_img = try resizeImage(original_img, t.size.w - 2, t.size.h - 4);
-        defer stb.stbi_image_free(resized_img.data);
+            t.stats = .{
+                .original_w = original_img.width,
+                .original_h = original_img.height,
+                .new_w = img.width,
+                .new_h = img.height,
+            };
 
-        t.stats = .{
-            .original_w = original_img.width,
-            .original_h = original_img.height,
-            .new_w = resized_img.width,
-            .new_h = resized_img.height,
-        };
+            const img_len = img.height * img.width * img.channels;
 
-        const img_len = resized_img.height * resized_img.width * resized_img.channels;
+            try t.enableAsciiMode();
+            try t.renderAsciiArt(
+                img.data[0..img_len],
+                img.width,
+                img.height,
+                img.channels,
+                args.color,
+                args.invert_color,
+            );
 
-        try t.enableAsciiMode();
-        try t.renderAsciiArt(
-            resized_img.data[0..img_len],
-            resized_img.width,
-            resized_img.height,
-            resized_img.channels,
-            args.color,
-        );
-
-        // Wait for user input before exiting
-        _ = try t.stdin.readByte();
-        try t.disableAsciiMode();
+            // Wait for user input before exiting
+            _ = try t.stdin.readByte();
+            try t.disableAsciiMode();
+        },
+        OutputType.Text => {
+            // 1 : og
+            // dr : grid
+            const img = try resizeImage(original_img, original_img.width, original_img.height / 2);
+            defer stb.free(img.data);
+            const ascii_txt = try generateAsciiTxt(
+                allocator,
+                img,
+                edge_result,
+                args,
+            );
+            defer allocator.free(ascii_txt);
+            try saveOutputTxt(ascii_txt, args);
+        },
+        else => {},
     }
+}
+
+fn generateAsciiTxt(
+    allocator: std.mem.Allocator,
+    img: Image,
+    edge_result: EdgeData,
+    args: Args,
+) ![]u8 {
+    const out_w = (img.width / args.block_size) * args.block_size;
+    const out_h = (img.height / args.block_size) * args.block_size;
+
+    var ascii_text = std.ArrayList(u8).init(allocator);
+    defer ascii_text.deinit();
+
+    var y: usize = 0;
+    while (y < out_h) : (y += args.block_size) {
+        var x: usize = 0;
+        while (x < out_w) : (x += args.block_size) {
+            const block_info = calculateBlockInfo(img, edge_result, x, y, out_w, out_h, args);
+            const ascii_char = selectAsciiChar(block_info, args);
+            try ascii_text.append(ascii_char);
+        }
+        try ascii_text.append('\n');
+    }
+
+    return ascii_text.toOwnedSlice();
+}
+
+fn saveOutputTxt(ascii_text: []const u8, args: Args) !void {
+    const file = try std.fs.cwd().createFile(args.output.?, .{});
+    defer file.close();
+
+    try file.writeAll(ascii_text);
 }
 
 fn loadAndScaleImage(allocator: std.mem.Allocator, args: Args) !Image {
