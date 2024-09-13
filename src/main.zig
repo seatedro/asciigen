@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const clap = @import("clap");
 const mime = @import("mime.zig");
 const term = @import("term.zig");
+const FrameBuffer = @import("util.zig").FrameBuffer;
 // const stb = @import("stb");
 const stb = @cImport({
     @cInclude("stb_image.h");
@@ -184,6 +185,7 @@ const Args = struct {
     ffmpeg_options: std.StringHashMap([]const u8),
     stretched: bool,
     output_type: OutputType,
+    frame_rate: ?f32,
 
     pub fn deinit(self: *Args) void {
         var it = self.ffmpeg_options.iterator();
@@ -234,6 +236,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         \\    --codec <str>              Encoder Codec like "libx264" or "hevc_videotoolbox" (optional)
         \\    --keep_audio               Keeps the audio if input is a video
         \\    --stretched                Resizes media to fit terminal window
+        \\-f, --frame_rate <f32>         Target frame rate for video output (default: matches input fps)
         \\<str>...
     );
 
@@ -319,6 +322,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         .codec = res.args.codec,
         .keep_audio = res.args.keep_audio != 0,
         .ffmpeg_options = ffmpeg_options,
+        .frame_rate = res.args.frame_rate,
         .stretched = res.args.stretched != 0,
     };
 }
@@ -373,6 +377,7 @@ fn sortCharsBySize(allocator: std.mem.Allocator, input: []const u8) ![]const u8 
 
 fn isVideoFile(file_path: []const u8) bool {
     const extension = std.fs.path.extension(file_path);
+    std.debug.print("Extension: {s}", .{extension});
     if (mime.extension_map.get(extension)) |mime_type| {
         return switch (mime_type) {
             .@"video/3gpp",
@@ -606,10 +611,11 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
     defer av.avcodec_free_context(@ptrCast(&enc_ctx));
 
     // Extract frame rate
-    const frame_rate = @as(f64, @floatFromInt(stream_info.stream.*.r_frame_rate.num)) /
+    const input_frame_rate = @as(f64, @floatFromInt(stream_info.stream.*.r_frame_rate.num)) /
         @as(f64, @floatFromInt(stream_info.stream.*.r_frame_rate.den));
-    const frame_delay_ns = @as(u64, @intFromFloat(1_000_000_000.0 / frame_rate));
-    std.debug.print("FPS: {d}, FrameDelay: {d}\n", .{ frame_rate, frame_delay_ns });
+    const target_frame_rate = args.frame_rate orelse input_frame_rate;
+    const frame_time_ns = @as(u64, @intFromFloat(1e9 / target_frame_rate));
+    std.debug.print("Input FPS: {d}, Target FPS: {d}, FrameTime: {d}\n", .{ input_frame_rate, target_frame_rate, frame_time_ns });
 
     var audio_stream_info: ?AVStream = null;
     if (args.keep_audio) {
@@ -650,12 +656,94 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
     }
     //
     // Get total frames
-    const total_frames: usize = @intCast(getTotalFrames(input_ctx, stream_info));
-    var progress = std.Progress.start(.{});
-    var root_node = progress.start("Processing video", total_frames);
+    // const total_frames: usize = @intCast(getTotalFrames(input_ctx, stream_info));
+    // var progress = std.Progress.start(.{});
+    // var root_node = progress.start("Processing video", total_frames);
     // Create a child node for ETA
-    var eta_node = progress.start("(time elapsed (s)/time remaining(s))", 100);
+    // var eta_node = progress.start("(time elapsed (s)/time remaining(s))", 100);
 
+    // Creates a FrameBuffer that holds enough frames for a 2 second buffer
+    var frame_buf = FrameBuffer(Image).init(allocator, @as(usize, @intFromFloat(target_frame_rate * 2)));
+    defer frame_buf.deinit();
+
+    const producer_thread = try std.Thread.spawn(
+        .{},
+        producerTask,
+        .{ allocator, &frame_buf, input_ctx, stream_info, audio_stream_info, dec_ctx, enc_ctx, op, t, args },
+    );
+    defer producer_thread.join();
+
+    var processed_frames: usize = 0;
+    const start_time = std.time.nanoTimestamp();
+    var last_frame_time = std.time.nanoTimestamp();
+    if (args.output_type != OutputType.Stdout) return;
+
+    // Consume the frames and render if we are targeting stdout
+    frame_buf.waitUntilReady();
+    t.stats = .{
+        .original_w = @intCast(dec_ctx.width),
+        .original_h = @intCast(dec_ctx.height),
+        .new_w = t.size.w,
+        .new_h = t.size.h - 4,
+    };
+    while (true) {
+        const f = frame_buf.pop() orelse break;
+        defer stb.stbi_image_free(f.data);
+
+        const target_time: i128 = start_time + (@as(i128, processed_frames) * @as(i128, frame_time_ns));
+        const curr_time = std.time.nanoTimestamp();
+        const sleep_duration: i128 = target_time - curr_time;
+
+        if (sleep_duration > 0) {
+            std.time.sleep(@as(u64, @intCast(sleep_duration)));
+        } else {
+            // If we are lagging behind, we should probably log that we're not able to
+            // match the target fps.
+            // We will not sleep in this case.
+        }
+
+        const post_sleep_time = std.time.nanoTimestamp();
+        const elapsed_seconds = @as(f32, @floatFromInt(post_sleep_time - start_time)) / 1e9;
+
+        processed_frames += 1;
+        t.stats.frame_count = processed_frames;
+        t.stats.fps = @as(f32, @floatFromInt(processed_frames)) / elapsed_seconds;
+        t.stats.frame_delay = @as(i64, @intCast(post_sleep_time - (start_time + ((processed_frames - 1) * frame_time_ns))));
+
+        const img_len = f.height * f.width * f.channels;
+        try t.renderAsciiArt(
+            f.data[0..img_len],
+            f.width,
+            f.height,
+            f.channels,
+            args.color,
+            args.invert_color,
+        );
+        last_frame_time = curr_time;
+    }
+
+    for (frames.items) |f| {
+        stb.stbi_image_free(f.data);
+    }
+
+    const avg_time = t.stats.total_time.? / @as(u128, t.stats.frame_count.?);
+    t.stats.avg_frame_time = avg_time;
+    std.debug.print("Average time for loop: {d}ms\n", .{t.stats.avg_frame_time.? / 1_000_000});
+    std.debug.print("Total Time rendering: {d}ms\n", .{@divFloor((std.time.nanoTimestamp() - start_time), 1_000_000)});
+}
+
+fn producerTask(
+    allocator: std.mem.Allocator,
+    frame_buf: *FrameBuffer(Image),
+    input_ctx: *av.AVFormatContext,
+    stream_info: AVStream,
+    audio_stream_info: ?AVStream,
+    dec_ctx: *av.AVCodecContext,
+    enc_ctx: *av.AVCodecContext,
+    op: ?OutputContext,
+    t: term,
+    args: Args,
+) !void {
     var packet = av.av_packet_alloc();
     defer av.av_packet_free(&packet);
 
@@ -751,11 +839,7 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
     );
     defer av.sws_freeContext(out_sws_ctx);
 
-    var processed_frames: usize = 0;
-    const start_time = std.time.milliTimestamp();
-    var last_update_time = start_time;
-    const update_interval: i64 = 1000; // Update every 1 second
-
+    var frame_count: usize = 0;
     while (av.av_read_frame(input_ctx, packet) >= 0) {
         defer av.av_packet_unref(packet);
 
@@ -818,7 +902,6 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
                     const frame_data = try allocator.alloc(u8, frame_size);
                     defer allocator.free(frame_data);
                     @memcpy(frame_data, rgb_frame.*.data[0][0..frame_size]);
-
                     const f = Image{
                         .data = frame_data.ptr,
                         .width = @intCast(rgb_frame.*.width),
@@ -826,23 +909,11 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
                         .channels = 3,
                     };
                     const resized_img = try resizeImage(f, t.size.w, t.size.h - 4);
-
-                    try frames.append(resized_img);
-                }
-                processed_frames += 1;
-                root_node.completeOne();
-
-                const current_time = std.time.milliTimestamp();
-                if (current_time - last_update_time >= update_interval) {
-                    const elapsed_time = @as(f64, @floatFromInt(current_time - start_time)) / 1000.0;
-                    const frames_per_second = @as(f64, @floatFromInt(processed_frames)) / elapsed_time;
-                    const estimated_total_time = @as(f64, @floatFromInt(total_frames)) / frames_per_second;
-                    const estimated_remaining_time = estimated_total_time - elapsed_time;
-
-                    eta_node.setCompletedItems(@as(usize, (@intFromFloat(elapsed_time))));
-                    eta_node.setEstimatedTotalItems(@intFromFloat(estimated_remaining_time));
-
-                    last_update_time = current_time;
+                    try frame_buf.push(resized_img);
+                    frame_count += 1;
+                    if (frame_count == frame_buf.max_size) {
+                        frame_buf.setReady();
+                    }
                 }
             }
         } else if (args.keep_audio and audio_stream_info != null and packet.*.stream_index == audio_stream_info.?.index) {
@@ -858,60 +929,6 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
             }
         }
     }
-
-    root_node.end();
-    eta_node.end();
-
-    var term_start_time: i64 = undefined;
-    if (args.output == null) {
-        t.stats = .{
-            .original_w = @intCast(dec_ctx.width),
-            .original_h = @intCast(dec_ctx.height),
-            .new_w = t.size.w,
-            .new_h = t.size.h - 4,
-        };
-
-        try t.enableAsciiMode();
-        defer t.disableAsciiMode() catch {};
-
-        try t.clear();
-
-        var frame_count: usize = 0;
-        term_start_time = std.time.milliTimestamp();
-        var prev_frame_time = std.time.milliTimestamp();
-
-        for (frames.items) |f| {
-            const current_time = std.time.milliTimestamp();
-
-            const img_len = f.height * f.width * f.channels;
-
-            frame_count += 1;
-            const elapsed_seconds = @as(f32, @floatFromInt(current_time - term_start_time)) / 1000.0;
-            t.stats.frame_count = frame_count;
-            t.stats.fps = @as(f32, @floatFromInt(frame_count)) / elapsed_seconds;
-            t.stats.frame_delay = current_time - prev_frame_time;
-
-            try t.renderAsciiArt(
-                f.data[0..img_len],
-                f.width,
-                f.height,
-                f.channels,
-                args.color,
-                args.invert_color,
-            );
-            prev_frame_time = current_time;
-            std.time.sleep(33 * std.time.ns_per_ms);
-        }
-
-        for (frames.items) |f| {
-            stb.stbi_image_free(f.data);
-        }
-    }
-
-    const avg_time = t.stats.total_time.? / @as(u128, t.stats.frame_count.?);
-    t.stats.avg_frame_time = avg_time;
-    std.debug.print("Average time for loop: {d}\n", .{t.stats.avg_frame_time.? / 1_000_000});
-    std.debug.print("Total Time rendering: {d}\n", .{std.time.milliTimestamp() - term_start_time});
 }
 
 fn convertFrameToAscii(allocator: std.mem.Allocator, frame: *av.AVFrame, args: Args) !void {
@@ -1305,9 +1322,10 @@ pub fn main() !void {
     var args = try parseArgs(allocator);
     defer args.deinit();
 
-    switch (args.output_type) {
-        OutputType.Video => try processVideo(allocator, args),
-        else => try processImage(allocator, args),
+    if (isVideoFile(args.input)) {
+        try processVideo(allocator, args);
+    } else {
+        try processImage(allocator, args);
     }
 }
 

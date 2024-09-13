@@ -39,12 +39,16 @@ fn setupExecutable(
     });
 
     const clap = b.dependency("clap", .{});
+    const miniaudio = b.dependency("miniaudio", .{});
     exe.root_module.addImport("clap", clap.module("clap"));
 
     linkFfmpeg(exe);
 
-    exe.addCSourceFile(.{ .file = b.path("stb/stb.c") });
+    exe.addCSourceFile(.{ .file = b.path("external/stb.c") });
+    exe.addCSourceFile(.{ .file = b.path("external/miniaudio.c") });
+    // std.debug.print("dep_stb path: {s}", .{dep_stb.path("").getPath(b)});
     exe.addIncludePath(dep_stb.path(""));
+    exe.addIncludePath(miniaudio.path(""));
 
     return exe;
 }

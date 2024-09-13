@@ -23,6 +23,10 @@
             .url = "git+https://github.com/nothings/stb.git?ref=master#f75e8d1cad7d90d72ef7a4661f1b994ef78b4e31",
             .hash = "1220c4fe5a4c4ebec402f5cdef08bc264b56fb07f259107d2b01ba8d416d88624b50",
         },
+        .miniaudio = .{
+            .url = "git+https://github.com/mackron/miniaudio.git#4a5b74bef029b3592c54b6048650ee5f972c1a48",
+            .hash = "1220daa13e5e160cc3e8d286843749f292dbe31ae7700df3584a7b1ce32da7dcb296",
+        },
     },
     .paths = .{
         // This makes *all* files, recursively, included in this package. It is generally
