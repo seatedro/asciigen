@@ -49,7 +49,7 @@ run the program with the following options (the default zig install directory is
 1. options:
    - `-h, --help`: print the help message and exit
    - `-i, --input <file>`: specify the input media file path (local path/URL) (required)
-   - `-o, --output <file>`: specify the output media file (required)
+   - `-o, --output <file>`: specify the output media file (txt/img/vid) (required)
    - `-c, --color`: use color ascii characters (optional)
    - `-n, --invert_color`: Inverts the color values (optional)
    - `-s, --scale <float>`: set the downscale or upscale factor (optional, default: 1)
@@ -65,12 +65,25 @@ run the program with the following options (the default zig install directory is
    - `    --threshold_disabled`: Disables the threshold.
    - `    --codec <string>`: Set the encoder codec like "libx264" or "hevc_videotoolbox". (default: searches for encoders on your machine)
    - `    --keep_audio`: Preserves audio from input video.
+   - `    --stretched`: Resizes media to fit terminal window
+   - `-f, --frame_rate`: Target frame rate for video output (default: matches input fps)
+
+>To render on the terminal directly, just omit the output option.
+
+>To output to a text file, use the .txt extension when setting the output option
 
 2. examples:
+
+   ### Image
 
    basic usage:
    ```bash
    asciigen -i input.jpg -o output.png
+   ```
+
+   text file output:
+   ```bash
+   asciigen -i input.jpg -o output.txt
    ```
 
    using color:
@@ -89,9 +102,21 @@ run the program with the following options (the default zig install directory is
    asciigen -i "https://w.wallhaven.cc/full/p9/wallhaven-p9gr2p.jpg" -o output.png -e -c-b 1.5
    ```
 
+   terminal output (just omit the output option):
+   ```bash
+   asciigen -i "https://w.wallhaven.cc/full/p9/wallhaven-p9gr2p.jpg" -e -c -b 1.5
+   ```
+
+   ### Video
+   
    with an input video (no urls allowed):
    ```bash
    asciigen -i /path/to/input/video.mp4 -o ascii.mp4 --codec hevc_nvenc --keep_audio
+   ```
+
+   with an input video and rendering on the terminal (stretched to fit terminal):
+   ```bash
+   asciigen -i /path/to/input/video.mp4 --stretched -c
    ```
 
    with input video and custom ffmpeg encoder options:
@@ -99,7 +124,12 @@ run the program with the following options (the default zig install directory is
    asciigen -i /path/to/input/video.mp4 -o ascii.mp4 -c --codec libx264 --keep_audio-- -preset fast -crf 20
    ```
 
-3. the program will generate an ascii art version of your input media and save it as a new media file.
+   with input video and custom ffmpeg encoder options:
+   ```bash
+   asciigen -i /path/to/input/video.mp4 -o ascii.mp4 -c --codec libx264 --keep_audio-- -preset fast -crf 20
+   ```
+
+4. the program will generate an ascii art version of your input media and save it as a new media file.
 
 for images: output file needs to be a `.png` since i saw some weird issues with jpegs.
 
