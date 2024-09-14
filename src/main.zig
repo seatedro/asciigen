@@ -377,7 +377,6 @@ fn sortCharsBySize(allocator: std.mem.Allocator, input: []const u8) ![]const u8 
 
 fn isVideoFile(file_path: []const u8) bool {
     const extension = std.fs.path.extension(file_path);
-    std.debug.print("Extension: {s}", .{extension});
     if (mime.extension_map.get(extension)) |mime_type| {
         return switch (mime_type) {
             .@"video/3gpp",
@@ -686,6 +685,9 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
         .new_w = t.size.w,
         .new_h = t.size.h - 4,
     };
+    try t.enableAsciiMode();
+    defer t.disableAsciiMode() catch {};
+
     while (true) {
         const f = frame_buf.pop() orelse break;
         defer stb.stbi_image_free(f.data);
