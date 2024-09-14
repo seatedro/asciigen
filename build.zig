@@ -43,7 +43,7 @@ fn setupExecutable(
 
     linkFfmpeg(exe);
 
-    exe.addCSourceFile(.{ .file = b.path("stb/stb.c") });
+    exe.addCSourceFile(.{ .file = b.path("external/stb.c") });
     exe.addIncludePath(dep_stb.path(""));
 
     return exe;
