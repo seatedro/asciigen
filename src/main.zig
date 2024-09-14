@@ -653,13 +653,6 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
         }
         frames.deinit();
     }
-    //
-    // Get total frames
-    // const total_frames: usize = @intCast(getTotalFrames(input_ctx, stream_info));
-    // var progress = std.Progress.start(.{});
-    // var root_node = progress.start("Processing video", total_frames);
-    // Create a child node for ETA
-    // var eta_node = progress.start("(time elapsed (s)/time remaining(s))", 100);
 
     // Creates a FrameBuffer that holds enough frames for a 2 second buffer
     var frame_buf = FrameBuffer(Image).init(allocator, @as(usize, @intFromFloat(target_frame_rate * 2)));
@@ -746,6 +739,18 @@ fn producerTask(
     t: term,
     args: Args,
 ) !void {
+    // Get total frames
+    var total_frames: usize = undefined;
+    var progress: std.Progress.Node = undefined;
+    var root_node: std.Progress.Node = undefined;
+    var eta_node: std.Progress.Node = undefined;
+    if (args.output_type == OutputType.Video) {
+        total_frames = @intCast(getTotalFrames(input_ctx, stream_info));
+        progress = std.Progress.start(.{});
+        root_node = progress.start("Processing video", total_frames);
+        eta_node = progress.start("(time elapsed (s)/time remaining(s))", 100);
+    }
+
     var packet = av.av_packet_alloc();
     defer av.av_packet_free(&packet);
 
@@ -842,6 +847,9 @@ fn producerTask(
     defer av.sws_freeContext(out_sws_ctx);
 
     var frame_count: usize = 0;
+    const start_time = std.time.milliTimestamp();
+    var last_update_time = start_time;
+    const update_interval: i64 = 1000; // Update every 1 second
     while (av.av_read_frame(input_ctx, packet) >= 0) {
         defer av.av_packet_unref(packet);
 
@@ -860,6 +868,7 @@ fn producerTask(
                     &rgb_frame.*.data,
                     &rgb_frame.*.linesize,
                 );
+                frame_count += 1;
                 if (op) |output| {
                     try convertFrameToAscii(allocator, rgb_frame, args);
                     _ = av.sws_scale(
@@ -912,9 +921,24 @@ fn producerTask(
                     };
                     const resized_img = try resizeImage(f, t.size.w, t.size.h - 4);
                     try frame_buf.push(resized_img);
-                    frame_count += 1;
                     if (frame_count == frame_buf.max_size) {
                         frame_buf.setReady();
+                    }
+                }
+                if (args.output_type == OutputType.Video) {
+                    root_node.completeOne();
+
+                    const current_time = std.time.milliTimestamp();
+                    if (current_time - last_update_time >= update_interval) {
+                        const elapsed_time = @as(f64, @floatFromInt(current_time - start_time)) / 1000.0;
+                        const frames_per_second = @as(f64, @floatFromInt(frame_count)) / elapsed_time;
+                        const estimated_total_time = @as(f64, @floatFromInt(total_frames)) / frames_per_second;
+                        const estimated_remaining_time = estimated_total_time - elapsed_time;
+
+                        eta_node.setCompletedItems(@as(usize, (@intFromFloat(elapsed_time))));
+                        eta_node.setEstimatedTotalItems(@intFromFloat(estimated_remaining_time));
+
+                        last_update_time = current_time;
                     }
                 }
             }
