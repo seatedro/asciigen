@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const util = @import("util.zig");
 
 pub const TermSize = struct {
     h: usize,
@@ -60,6 +61,7 @@ stdout: std.fs.File.Writer,
 stdin: std.fs.File.Reader,
 size: TermSize,
 ascii_chars: []const u8,
+ascii_info: []util.AsciiCharInfo,
 stats: Stats,
 buf: []u8,
 buf_index: usize,
@@ -74,6 +76,8 @@ pub fn init(allocator: std.mem.Allocator, ascii_chars: []const u8) !Self {
     const stdout = std.io.getStdOut().writer();
     const stdin = std.io.getStdIn().reader();
     const size = try getTermSize(std.io.getStdOut().handle);
+
+    const ascii_info = try util.initAsciiChars(allocator, ascii_chars);
 
     const char_size = ascii_chars.len;
     const color_size = RGB_FG.len + 12;
@@ -95,6 +99,7 @@ pub fn init(allocator: std.mem.Allocator, ascii_chars: []const u8) !Self {
         .stdin = stdin,
         .size = size,
         .ascii_chars = ascii_chars,
+        .ascii_info = ascii_info,
         .stats = undefined,
         .buf = buf,
         .buf_index = 0,
@@ -111,26 +116,12 @@ pub fn init(allocator: std.mem.Allocator, ascii_chars: []const u8) !Self {
 pub fn deinit(self: *Self) void {
     self.allocator.free(self.buf);
     self.allocator.free(self.init_frame);
+    self.allocator.free(self.ascii_info);
     // for (0..MAX_COLOR) |i| {
     //     self.allocator.free(self.fg[i]);
     //     self.allocator.free(self.bg[i]);
     // }
 }
-
-// fn initColor(self: *Self) !void {
-//     for (0..MAX_COLOR) |color_idx| {
-//         self.fg[color_idx] = try std.fmt.allocPrint(
-//             self.allocator,
-//             "{s}{d}m",
-//             .{ CSI ++ SET_FG_COLOR ++ ";", color_idx },
-//         );
-//         self.bg[color_idx] = try std.fmt.allocPrint(
-//             self.allocator,
-//             "{s}{d}m",
-//             .{ CSI ++ SET_BG_COLOR ++ ";", color_idx },
-//         );
-//     }
-// }
 
 pub fn enableAsciiMode(self: *Self) !void {
     try self.stdout.writeAll(ASCII_TERM_ON);
@@ -157,30 +148,6 @@ fn writeToBuffer(self: *Self, s: []const u8) void {
     self.buf_len += s.len;
 }
 
-pub fn calculateAsciiDimensions(self: *Self, width: usize, height: usize) TermSize {
-    const aspect_ratio = @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height));
-    const max_width = self.size.w - 2; // Account for left and right borders
-    const max_height = (self.size.h - 4) * 2; // Account for top and bottom borders, and multiply by 2 for vertical resolution
-
-    var ascii_width = max_width;
-    var ascii_height = @as(usize, @intFromFloat(@as(f32, @floatFromInt(ascii_width)) / aspect_ratio)) * 2;
-
-    if (ascii_height > max_height) {
-        ascii_height = max_height;
-        ascii_width = @as(usize, @intFromFloat(@as(f32, @floatFromInt(ascii_height)) * aspect_ratio / 2));
-    }
-
-    return .{ .w = ascii_width, .h = ascii_height / 2 };
-}
-
-pub fn drawBuf(self: *Self, s: []const u8) void {
-    for (s) |b| {
-        self.buf[self.buf_index] = b;
-        self.buf_index += 1;
-        self.buf_len += 1;
-    }
-}
-
 pub fn renderAsciiArt(
     self: *Self,
     img: []const u8,
@@ -197,8 +164,6 @@ pub fn renderAsciiArt(
     if (!color) {
         self.writeToBuffer(WHITE_FG);
     }
-    // Print top padding
-    // TODO: v_padding is comptime, so replace it with buffer alloc
     while (i < v_padding) : (i += 1) {
         self.writeToBuffer("\n");
     }
@@ -219,7 +184,9 @@ pub fn renderAsciiArt(
             const idx = (y * width + x) * channels;
 
             const brightness = if (invert) 255 - img[idx] else img[idx];
-            const ascii_char = self.ascii_chars[brightness * self.ascii_chars.len / 256];
+            const ascii_index = (brightness * self.ascii_info.len) / 256;
+            const selected_char = self.ascii_info[@min(ascii_index, self.ascii_info.len - 1)];
+            const ascii_char = self.ascii_chars[selected_char.start .. selected_char.start + selected_char.len];
 
             if (color) {
                 var r = img[idx];
@@ -233,12 +200,12 @@ pub fn renderAsciiArt(
                 var color_code_buf: [32]u8 = undefined;
                 const color_code = std.fmt.bufPrint(
                     &color_code_buf,
-                    RGB_FG ++ "{d};{d};{d}m{c}" ++ RESET_COLOR,
+                    RGB_FG ++ "{d};{d};{d}m{s}" ++ RESET_COLOR,
                     .{ r, g, b, ascii_char },
                 ) catch unreachable;
                 self.writeToBuffer(color_code);
             } else {
-                self.writeToBuffer(&[_]u8{ascii_char});
+                self.writeToBuffer(ascii_char);
             }
         }
 

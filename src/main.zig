@@ -1,10 +1,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const clap = @import("clap");
+const bitmap = @import("bitmap.zig");
 const mime = @import("mime.zig");
 const term = @import("term.zig");
-const FrameBuffer = @import("util.zig").FrameBuffer;
-// const stb = @import("stb");
+const util = @import("util.zig");
 const stb = @cImport({
     @cInclude("stb_image.h");
     @cInclude("stb_image_write.h");
@@ -22,141 +22,9 @@ const av = @cImport({
     @cInclude("libavutil/samplefmt.h");
 });
 
-const default_characters = " .:-=+*%@#";
+// const default_characters = " .:-=+*%@#█";
+const default_characters = " c+*?%&$@#";
 const full_characters = " .-:=+iltIcsv1x%7aejorzfnuCJT3*69LYpqy25SbdgFGOVXkPhmw48AQDEHKUZR@B#NW0M";
-
-/// Author: Daniel Hepper <daniel@hepper.net>
-/// URL: https://github.com/dhepper/font8x8
-const font_bitmap: [128][8]u8 = .{
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0000 (null)
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0001
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0002
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0003
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0004
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0005
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0006
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0007
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0008
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0009
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+000A
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+000B
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+000C
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+000D
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+000E
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+000F
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0010
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0011
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0012
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0013
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0014
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0015
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0016
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0017
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0018
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0019
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+001A
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+001B
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+001C
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+001D
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+001E
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+001F
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0020 (space)
-    .{ 0x18, 0x3C, 0x3C, 0x18, 0x18, 0x00, 0x18, 0x00 }, // U+0021 (!)
-    .{ 0x6C, 0x6C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0022 (")
-    .{ 0x6C, 0x6C, 0xFE, 0x6C, 0xFE, 0x6C, 0x6C, 0x00 }, // U+0023 (#)
-    .{ 0x30, 0x7C, 0xC0, 0x78, 0x0C, 0xF8, 0x30, 0x00 }, // U+0024 ($)
-    .{ 0x00, 0xC6, 0xCC, 0x18, 0x30, 0x66, 0xC6, 0x00 }, // U+0025 (%)
-    .{ 0x38, 0x6C, 0x38, 0x76, 0xDC, 0xCC, 0x76, 0x00 }, // U+0026 (&)
-    .{ 0x60, 0x60, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0027 (')
-    .{ 0x18, 0x30, 0x60, 0x60, 0x60, 0x30, 0x18, 0x00 }, // U+0028 (()
-    .{ 0x60, 0x30, 0x18, 0x18, 0x18, 0x30, 0x60, 0x00 }, // U+0029 ())
-    .{ 0x00, 0x66, 0x3C, 0xFF, 0x3C, 0x66, 0x00, 0x00 }, // U+002A (*)
-    .{ 0x00, 0x30, 0x30, 0xFC, 0x30, 0x30, 0x00, 0x00 }, // U+002B (+)
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0x30, 0x60 }, // U+002C (,)
-    .{ 0x00, 0x00, 0x00, 0xFC, 0x00, 0x00, 0x00, 0x00 }, // U+002D (-)
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0x30, 0x00 }, // U+002E (.)
-    .{ 0x06, 0x0C, 0x18, 0x30, 0x60, 0xC0, 0x80, 0x00 }, // U+002F (/)
-    .{ 0x7C, 0xC6, 0xCE, 0xDE, 0xF6, 0xE6, 0x7C, 0x00 }, // U+0030 (0)
-    .{ 0x30, 0x70, 0x30, 0x30, 0x30, 0x30, 0xFC, 0x00 }, // U+0031 (1)
-    .{ 0x78, 0xCC, 0x0C, 0x38, 0x60, 0xCC, 0xFC, 0x00 }, // U+0032 (2)
-    .{ 0x78, 0xCC, 0x0C, 0x38, 0x0C, 0xCC, 0x78, 0x00 }, // U+0033 (3)
-    .{ 0x1C, 0x3C, 0x6C, 0xCC, 0xFE, 0x0C, 0x1E, 0x00 }, // U+0034 (4)
-    .{ 0xFC, 0xC0, 0xF8, 0x0C, 0x0C, 0xCC, 0x78, 0x00 }, // U+0035 (5)
-    .{ 0x38, 0x60, 0xC0, 0xF8, 0xCC, 0xCC, 0x78, 0x00 }, // U+0036 (6)
-    .{ 0xFC, 0xCC, 0x0C, 0x18, 0x30, 0x30, 0x30, 0x00 }, // U+0037 (7)
-    .{ 0x78, 0xCC, 0xCC, 0x78, 0xCC, 0xCC, 0x78, 0x00 }, // U+0038 (8)
-    .{ 0x78, 0xCC, 0xCC, 0x7C, 0x0C, 0x18, 0x70, 0x00 }, // U+0039 (9)
-    .{ 0x00, 0x30, 0x30, 0x00, 0x00, 0x30, 0x30, 0x00 }, // U+003A (:)
-    .{ 0x00, 0x30, 0x30, 0x00, 0x00, 0x30, 0x30, 0x60 }, // U+003B (;)
-    .{ 0x18, 0x30, 0x60, 0xC0, 0x60, 0x30, 0x18, 0x00 }, // U+003C (<)
-    .{ 0x00, 0x00, 0xFC, 0x00, 0x00, 0xFC, 0x00, 0x00 }, // U+003D (=)
-    .{ 0x60, 0x30, 0x18, 0x0C, 0x18, 0x30, 0x60, 0x00 }, // U+003E (>)
-    .{ 0x78, 0xCC, 0x0C, 0x18, 0x30, 0x00, 0x30, 0x00 }, // U+003F (?)
-    .{ 0x7C, 0xC6, 0xDE, 0xDE, 0xDE, 0xC0, 0x78, 0x00 }, // U+0040 (@)
-    .{ 0x30, 0x78, 0xCC, 0xCC, 0xFC, 0xCC, 0xCC, 0x00 }, // U+0041 (A)
-    .{ 0xFC, 0x66, 0x66, 0x7C, 0x66, 0x66, 0xFC, 0x00 }, // U+0042 (B)
-    .{ 0x3C, 0x66, 0xC0, 0xC0, 0xC0, 0x66, 0x3C, 0x00 }, // U+0043 (C)
-    .{ 0xF8, 0x6C, 0x66, 0x66, 0x66, 0x6C, 0xF8, 0x00 }, // U+0044 (D)
-    .{ 0xFE, 0x62, 0x68, 0x78, 0x68, 0x62, 0xFE, 0x00 }, // U+0045 (E)
-    .{ 0xFE, 0x62, 0x68, 0x78, 0x68, 0x60, 0xF0, 0x00 }, // U+0046 (F)
-    .{ 0x3C, 0x66, 0xC0, 0xC0, 0xCE, 0x66, 0x3E, 0x00 }, // U+0047 (G)
-    .{ 0xCC, 0xCC, 0xCC, 0xFC, 0xCC, 0xCC, 0xCC, 0x00 }, // U+0048 (H)
-    .{ 0x78, 0x30, 0x30, 0x30, 0x30, 0x30, 0x78, 0x00 }, // U+0049 (I)
-    .{ 0x1E, 0x0C, 0x0C, 0x0C, 0xCC, 0xCC, 0x78, 0x00 }, // U+004A (J)
-    .{ 0xE6, 0x66, 0x6C, 0x78, 0x6C, 0x66, 0xE6, 0x00 }, // U+004B (K)
-    .{ 0xF0, 0x60, 0x60, 0x60, 0x62, 0x66, 0xFE, 0x00 }, // U+004C (L)
-    .{ 0xC6, 0xEE, 0xFE, 0xFE, 0xD6, 0xC6, 0xC6, 0x00 }, // U+004D (M)
-    .{ 0xC6, 0xE6, 0xF6, 0xDE, 0xCE, 0xC6, 0xC6, 0x00 }, // U+004E (N)
-    .{ 0x38, 0x6C, 0xC6, 0xC6, 0xC6, 0x6C, 0x38, 0x00 }, // U+004F (O)
-    .{ 0xFC, 0x66, 0x66, 0x7C, 0x60, 0x60, 0xF0, 0x00 }, // U+0050 (P)
-    .{ 0x78, 0xCC, 0xCC, 0xCC, 0xDC, 0x78, 0x1C, 0x00 }, // U+0051 (Q)
-    .{ 0xFC, 0x66, 0x66, 0x7C, 0x6C, 0x66, 0xE6, 0x00 }, // U+0052 (R)
-    .{ 0x78, 0xCC, 0xE0, 0x70, 0x1C, 0xCC, 0x78, 0x00 }, // U+0053 (S)
-    .{ 0xFC, 0xB4, 0x30, 0x30, 0x30, 0x30, 0x78, 0x00 }, // U+0054 (T)
-    .{ 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xFC, 0x00 }, // U+0055 (U)
-    .{ 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0x78, 0x30, 0x00 }, // U+0056 (V)
-    .{ 0xC6, 0xC6, 0xC6, 0xD6, 0xFE, 0xEE, 0xC6, 0x00 }, // U+0057 (W)
-    .{ 0xC6, 0xC6, 0x6C, 0x38, 0x38, 0x6C, 0xC6, 0x00 }, // U+0058 (X)
-    .{ 0xCC, 0xCC, 0xCC, 0x78, 0x30, 0x30, 0x78, 0x00 }, // U+0059 (Y)
-    .{ 0xFE, 0xC6, 0x8C, 0x18, 0x32, 0x66, 0xFE, 0x00 }, // U+005A (Z)
-    .{ 0x78, 0x60, 0x60, 0x60, 0x60, 0x60, 0x78, 0x00 }, // U+005B ([)
-    .{ 0xC0, 0x60, 0x30, 0x18, 0x0C, 0x06, 0x02, 0x00 }, // U+005C (\)
-    .{ 0x78, 0x18, 0x18, 0x18, 0x18, 0x18, 0x78, 0x00 }, // U+005D (])
-    .{ 0x10, 0x38, 0x6C, 0xC6, 0x00, 0x00, 0x00, 0x00 }, // U+005E (^)
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF }, // U+005F (_)
-    .{ 0x30, 0x30, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+0060 (`)
-    .{ 0x00, 0x00, 0x78, 0x0C, 0x7C, 0xCC, 0x76, 0x00 }, // U+0061 (a)
-    .{ 0xE0, 0x60, 0x60, 0x7C, 0x66, 0x66, 0xDC, 0x00 }, // U+0062 (b)
-    .{ 0x00, 0x00, 0x78, 0xCC, 0xC0, 0xCC, 0x78, 0x00 }, // U+0063 (c)
-    .{ 0x1C, 0x0C, 0x0C, 0x7C, 0xCC, 0xCC, 0x76, 0x00 }, // U+0064 (d)
-    .{ 0x00, 0x00, 0x78, 0xCC, 0xFC, 0xC0, 0x78, 0x00 }, // U+0065 (e)
-    .{ 0x38, 0x6C, 0x60, 0xF0, 0x60, 0x60, 0xF0, 0x00 }, // U+0066 (f)
-    .{ 0x00, 0x00, 0x76, 0xCC, 0xCC, 0x7C, 0x0C, 0xF8 }, // U+0067 (g)
-    .{ 0xE0, 0x60, 0x6C, 0x76, 0x66, 0x66, 0xE6, 0x00 }, // U+0068 (h)
-    .{ 0x30, 0x00, 0x70, 0x30, 0x30, 0x30, 0x78, 0x00 }, // U+0069 (i)
-    .{ 0x0C, 0x00, 0x0C, 0x0C, 0x0C, 0xCC, 0xCC, 0x78 }, // U+006A (j)
-    .{ 0xE0, 0x60, 0x66, 0x6C, 0x78, 0x6C, 0xE6, 0x00 }, // U+006B (k)
-    .{ 0x70, 0x30, 0x30, 0x30, 0x30, 0x30, 0x78, 0x00 }, // U+006C (l)
-    .{ 0x00, 0x00, 0xCC, 0xFE, 0xFE, 0xD6, 0xC6, 0x00 }, // U+006D (m)
-    .{ 0x00, 0x00, 0xF8, 0xCC, 0xCC, 0xCC, 0xCC, 0x00 }, // U+006E (n)
-    .{ 0x00, 0x00, 0x78, 0xCC, 0xCC, 0xCC, 0x78, 0x00 }, // U+006F (o)
-    .{ 0x00, 0x00, 0xDC, 0x66, 0x66, 0x7C, 0x60, 0xF0 }, // U+0070 (p)
-    .{ 0x00, 0x00, 0x76, 0xCC, 0xCC, 0x7C, 0x0C, 0x1E }, // U+0071 (q)
-    .{ 0x00, 0x00, 0xDC, 0x76, 0x66, 0x60, 0xF0, 0x00 }, // U+0072 (r)
-    .{ 0x00, 0x00, 0x7C, 0xC0, 0x78, 0x0C, 0xF8, 0x00 }, // U+0073 (s)
-    .{ 0x10, 0x30, 0x7C, 0x30, 0x30, 0x34, 0x18, 0x00 }, // U+0074 (t)
-    .{ 0x00, 0x00, 0xCC, 0xCC, 0xCC, 0xCC, 0x76, 0x00 }, // U+0075 (u)
-    .{ 0x00, 0x00, 0xCC, 0xCC, 0xCC, 0x78, 0x30, 0x00 }, // U+0076 (v)
-    .{ 0x00, 0x00, 0xC6, 0xD6, 0xFE, 0xFE, 0x6C, 0x00 }, // U+0077 (w)
-    .{ 0x00, 0x00, 0xC6, 0x6C, 0x38, 0x6C, 0xC6, 0x00 }, // U+0078 (x)
-    .{ 0x00, 0x00, 0xCC, 0xCC, 0xCC, 0x7C, 0x0C, 0xF8 }, // U+0079 (y)
-    .{ 0x00, 0x00, 0xFC, 0x98, 0x30, 0x64, 0xFC, 0x00 }, // U+007A (z)
-    .{ 0x1C, 0x30, 0x30, 0xE0, 0x30, 0x30, 0x1C, 0x00 }, // U+007B ({)
-    .{ 0x18, 0x18, 0x18, 0x00, 0x18, 0x18, 0x18, 0x00 }, // U+007C (|)
-    .{ 0xE0, 0x30, 0x30, 0x1C, 0x30, 0x30, 0xE0, 0x00 }, // U+007D (})
-    .{ 0x76, 0xDC, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+007E (~)
-    .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // U+007F
-};
 
 const OutputType = enum {
     Stdout,
@@ -186,6 +54,8 @@ const Args = struct {
     stretched: bool,
     output_type: OutputType,
     frame_rate: ?f32,
+    ascii_info: []util.AsciiCharInfo,
+    auto_adjust: bool,
 
     pub fn deinit(self: *Args) void {
         var it = self.ffmpeg_options.iterator();
@@ -204,13 +74,6 @@ const Image = struct {
     channels: usize,
 };
 
-const Frame = struct {
-    data: []u8,
-    width: usize,
-    height: usize,
-    channels: usize,
-};
-
 const SobelFilter = struct {
     magnitude: []f32,
     direction: []f32,
@@ -223,6 +86,7 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         \\-o, --output <str>             Output file (img, video, txt)
         \\-c, --color                    Use color ASCII characters
         \\-n, --invert_color             Inverts the color values
+        \\-a, --auto_adjust              Auto adjusts the brightness and contrast of input media
         \\-s, --scale <f32>              Scale factor (default: 1.0)
         \\-e, --detect_edges             Detect edges
         \\    --sigma1 <f32>             Sigma 1 for DoG filter (default: 0.5)
@@ -287,35 +151,40 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         }
     }
 
+    const ascii_chars = if (res.args.ascii_chars) |custom_chars| blk: {
+        if (res.args.disable_sort != 0) {
+            break :blk custom_chars;
+        } else {
+            if (sortCharsBySize(allocator, custom_chars)) |sorted_chars| {
+                break :blk sorted_chars;
+            } else |_| {
+                break :blk default_characters;
+            }
+        }
+    } else blk: {
+        if (res.args.full_characters != 0) {
+            break :blk full_characters;
+        } else {
+            break :blk default_characters;
+        }
+    };
+    const ascii_info = try util.initAsciiChars(allocator, ascii_chars);
+
     return Args{
         .input = res.args.input.?,
         .output_type = output_type,
         .output = res.args.output,
         .color = res.args.color != 0,
         .invert_color = res.args.invert_color != 0,
+        .auto_adjust = res.args.auto_adjust != 0,
         .scale = res.args.scale orelse 1.0,
         .detect_edges = res.args.detect_edges != 0,
         .sigma1 = res.args.sigma1 orelse 0.5,
         .sigma2 = res.args.sigma2 orelse 1.0,
         .brightness_boost = res.args.brightness_boost orelse 1.0,
         .full_characters = res.args.full_characters != 0,
-        .ascii_chars = if (res.args.ascii_chars) |custom_chars| blk: {
-            if (res.args.disable_sort != 0) {
-                break :blk custom_chars;
-            } else {
-                if (sortCharsBySize(allocator, custom_chars)) |sorted_chars| {
-                    break :blk sorted_chars;
-                } else |_| {
-                    break :blk default_characters;
-                }
-            }
-        } else blk: {
-            if (res.args.full_characters != 0) {
-                break :blk full_characters;
-            } else {
-                break :blk default_characters;
-            }
-        },
+        .ascii_chars = ascii_chars,
+        .ascii_info = ascii_info,
         .disable_sort = res.args.disable_sort != 0,
         .block_size = res.args.block_size orelse 8,
         .threshold_disabled = res.args.threshold_disabled != 0,
@@ -329,24 +198,27 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
 
 fn sortCharsBySize(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
     const CharInfo = struct {
-        char: u8,
+        char: []const u8,
         size: usize,
     };
 
     var char_infos = std.ArrayList(CharInfo).init(allocator);
     defer char_infos.deinit();
 
-    for (input) |char| {
-        if (char >= 128) continue; // Skip non-ASCII characters
+    var it = std.unicode.Utf8Iterator{ .bytes = input, .i = 0 };
+    while (it.nextCodepoint()) |codepoint| {
+        const len = std.unicode.utf8CodepointSequenceLength(codepoint) catch continue;
+        const char_start = it.i - len;
+        const char = input[char_start..it.i];
 
-        const bitmap = font_bitmap[char];
+        const bm = bitmap.getCharSet(char) catch continue;
         var size: usize = 0;
 
-        for (bitmap) |row| {
+        for (bm) |row| {
             size += @popCount(row);
         }
 
-        if (size == 0 and char != ' ') continue; // Skip zero-size characters except space
+        if (size == 0 and !std.mem.eql(u8, char, " ")) continue; // Skip zero-size characters except space
 
         try char_infos.append(.{ .char = char, .size = size });
     }
@@ -359,16 +231,12 @@ fn sortCharsBySize(allocator: std.mem.Allocator, input: []const u8) ![]const u8 
     }.lessThan);
 
     // Create the sorted string
-    var result = try allocator.alloc(u8, char_infos.items.len);
-    for (char_infos.items, 0..) |char_info, i| {
-        result[i] = char_info.char;
+    var result = std.ArrayList(u8).init(allocator);
+    for (char_infos.items) |char_info| {
+        try result.appendSlice(char_info.char);
     }
 
-    // Print the sorted string
-    //std.debug.print("Sorted string: {s}\n", .{result});
-
-    // Convert []u8 to []const u8 before returning
-    return result[0..];
+    return result.toOwnedSlice();
 }
 
 // -----------------------
@@ -654,8 +522,8 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
         frames.deinit();
     }
 
-    // Creates a FrameBuffer that holds enough frames for a 2 second buffer
-    var frame_buf = FrameBuffer(Image).init(allocator, @as(usize, @intFromFloat(target_frame_rate * 2)));
+    // Creates a util.FrameBuffer that holds enough frames for a 2 second buffer
+    var frame_buf = util.FrameBuffer(Image).init(allocator, @as(usize, @intFromFloat(target_frame_rate * 2)));
     defer frame_buf.deinit();
 
     const producer_thread = try std.Thread.spawn(
@@ -705,12 +573,25 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
         t.stats.fps = @as(f32, @floatFromInt(processed_frames)) / elapsed_seconds;
         t.stats.frame_delay = @as(i64, @intCast(post_sleep_time - (start_time + ((processed_frames - 1) * frame_time_ns))));
 
-        const img_len = f.height * f.width * f.channels;
+        const adjusted_data = if (args.auto_adjust)
+            try autoBrightnessContrast(allocator, f, 1.0)
+        else
+            f.data[0 .. f.width * f.height * f.channels];
+
+        const adjusted_img = Image{
+            .data = adjusted_data.ptr,
+            .width = f.width,
+            .height = f.height,
+            .channels = f.channels,
+        };
+        defer if (args.auto_adjust) allocator.free(adjusted_data);
+
+        const img_len = adjusted_img.height * adjusted_img.width * adjusted_img.channels;
         try t.renderAsciiArt(
-            f.data[0..img_len],
-            f.width,
-            f.height,
-            f.channels,
+            adjusted_img.data[0..img_len],
+            adjusted_img.width,
+            adjusted_img.height,
+            adjusted_img.channels,
             args.color,
             args.invert_color,
         );
@@ -729,7 +610,7 @@ fn processVideo(allocator: std.mem.Allocator, args: Args) !void {
 
 fn producerTask(
     allocator: std.mem.Allocator,
-    frame_buf: *FrameBuffer(Image),
+    frame_buf: *util.FrameBuffer(Image),
     input_ctx: *av.AVFormatContext,
     stream_info: AVStream,
     audio_stream_info: ?AVStream,
@@ -965,19 +846,32 @@ fn convertFrameToAscii(allocator: std.mem.Allocator, frame: *av.AVFrame, args: A
         .channels = 3,
     };
 
-    const edge_result = try detectEdges(allocator, img, args);
+    const adjusted_data = if (args.auto_adjust)
+        try autoBrightnessContrast(allocator, img, 1.0)
+    else
+        img.data[0 .. img.width * img.height * img.channels];
+
+    const adjusted_img = Image{
+        .data = adjusted_data.ptr,
+        .width = img.width,
+        .height = img.height,
+        .channels = img.channels,
+    };
+    defer if (args.auto_adjust) allocator.free(adjusted_data);
+
+    const edge_result = try detectEdges(allocator, adjusted_img, args);
     defer if (args.detect_edges) {
         allocator.free(edge_result.grayscale);
         allocator.free(edge_result.magnitude);
         allocator.free(edge_result.direction);
     };
 
-    const ascii_img = try generateAsciiArt(allocator, img, edge_result, args);
+    const ascii_img = try generateAsciiArt(allocator, adjusted_img, edge_result, args);
     defer allocator.free(ascii_img);
 
     // Copy ascii art back to frame
-    const out_w = (img.width / args.block_size) * args.block_size;
-    const out_h = (img.height / args.block_size) * args.block_size;
+    const out_w = (adjusted_img.width / args.block_size) * args.block_size;
+    const out_h = (adjusted_img.height / args.block_size) * args.block_size;
     const frame_linesize = @as(usize, @intCast(frame.linesize[0]));
 
     for (0..out_h) |y| {
@@ -1149,6 +1043,54 @@ fn rgbToGrayScale(allocator: std.mem.Allocator, img: Image) ![]u8 {
     return grayscale_img;
 }
 
+fn autoBrightnessContrast(
+    allocator: std.mem.Allocator,
+    img: Image,
+    clip_hist_percent: f32,
+) ![]u8 {
+    const gray = try rgbToGrayScale(allocator, img);
+    defer allocator.free(gray);
+
+    // Calculate histogram / frequency distribution
+    var hist = [_]usize{0} ** 256;
+    for (gray) |px| {
+        hist[px] += 1;
+    }
+
+    // Cumulative distribution
+    var accumulator = [_]usize{0} ** 256;
+    accumulator[0] = hist[0];
+    for (1..256) |i| {
+        accumulator[i] = accumulator[i - 1] + hist[i];
+    }
+
+    // Locate points to clip
+    const max = accumulator[255];
+    const clip_hist_count = @as(usize, @intFromFloat(@as(f32, @floatFromInt(max)) * clip_hist_percent / 100.0 / 2.0));
+
+    // Locate left cut
+    var min_gray: usize = 0;
+    while (accumulator[min_gray] < clip_hist_count) : (min_gray += 1) {}
+
+    // Locate right cut
+    var max_gray: usize = 255;
+    while (accumulator[max_gray] >= (max - clip_hist_count)) : (max_gray -= 1) {}
+
+    // Calculate alpha and beta values
+    const alpha = 255.0 / @as(f32, @floatFromInt(max_gray - min_gray));
+    const beta = -@as(f32, @floatFromInt(min_gray)) * alpha;
+
+    // Apply brightness and contrast adjustment
+    const len = img.width * img.height * img.channels;
+    var res = try allocator.alloc(u8, len);
+    for (0..len) |i| {
+        const adjusted = @as(f32, @floatFromInt(img.data[i])) * alpha + beta;
+        res[i] = @intFromFloat(std.math.clamp(adjusted, 0, 255));
+    }
+
+    return res;
+}
+
 fn gaussianKernel(allocator: std.mem.Allocator, sigma: f32) ![]f32 {
     const size: usize = @intFromFloat(6 * sigma);
     const kernel_size = if (size % 2 == 0) size + 1 else size;
@@ -1278,17 +1220,16 @@ fn convertToAscii(
     h: usize,
     x: usize,
     y: usize,
-    ascii_char: u8,
+    ascii_char: []const u8,
     color: [3]u8,
     block_size: u8,
     color_enabled: bool,
-) void {
-    if (ascii_char < 32 or ascii_char > 126) {
-        // std.debug.print("Error: invalid ASCII character: {}\n", .{ascii_char});
-        return;
-    }
-
-    const bitmap = &font_bitmap[ascii_char];
+) !void {
+    // if (ascii_char == 0x2588) {
+    //     std.debug.print("The encoding stuff works, we have a {s} character\n", .{ascii_char});
+    //     std.process.exit(0);
+    // }
+    const bm = &(try bitmap.getCharSet(ascii_char));
     const block_w = @min(block_size, w - x);
     const block_h = @min(block_size, img.len / (w * 3) - y);
 
@@ -1307,7 +1248,7 @@ fn convertToAscii(
                 const idx = (img_y * w + img_x) * 3;
                 const shift: u3 = @intCast(7 - dx);
                 const bit: u8 = @as(u8, 1) << shift;
-                if ((bitmap[dy] & bit) != 0) {
+                if ((bm[dy] & bit) != 0) {
                     // Character pixel: use the original color
                     if (color_enabled) {
                         img[idx] = color[0];
@@ -1347,6 +1288,7 @@ pub fn main() !void {
 
     var args = try parseArgs(allocator);
     defer args.deinit();
+    defer allocator.free(args.ascii_info);
 
     if (isVideoFile(args.input)) {
         try processVideo(allocator, args);
@@ -1359,7 +1301,20 @@ fn processImage(allocator: std.mem.Allocator, args: Args) !void {
     const original_img = try loadAndScaleImage(allocator, args);
     defer stb.stbi_image_free(original_img.data);
 
-    const edge_result = try detectEdges(allocator, original_img, args);
+    const adjusted_data = if (args.auto_adjust)
+        try autoBrightnessContrast(allocator, original_img, 1.0)
+    else
+        original_img.data[0 .. original_img.width * original_img.height * original_img.channels];
+
+    const adjusted_img = Image{
+        .data = adjusted_data.ptr,
+        .width = original_img.width,
+        .height = original_img.height,
+        .channels = original_img.channels,
+    };
+    defer allocator.free(adjusted_data);
+
+    const edge_result = try detectEdges(allocator, adjusted_img, args);
     defer if (args.detect_edges) {
         allocator.free(edge_result.grayscale);
         allocator.free(edge_result.magnitude);
@@ -1368,9 +1323,9 @@ fn processImage(allocator: std.mem.Allocator, args: Args) !void {
 
     switch (args.output_type) {
         OutputType.Image => {
-            const ascii_img = try generateAsciiArt(allocator, original_img, edge_result, args);
+            const ascii_img = try generateAsciiArt(allocator, adjusted_img, edge_result, args);
             defer allocator.free(ascii_img);
-            try saveOutputImage(ascii_img, original_img, args);
+            try saveOutputImage(ascii_img, adjusted_img, args);
         },
         OutputType.Stdout => {
             var t = try term.init(allocator, args.ascii_chars);
@@ -1378,26 +1333,26 @@ fn processImage(allocator: std.mem.Allocator, args: Args) !void {
 
             var img: Image = undefined;
             if (args.stretched) {
-                img = try resizeImage(original_img, t.size.w - 2, t.size.h - 4);
+                img = try resizeImage(adjusted_img, t.size.w - 2, t.size.h - 4);
             } else {
                 var new_w: usize = 0;
                 var new_h: usize = 0;
-                const rw = original_img.width / (t.size.w - 2);
-                const rh = original_img.height / (t.size.h - 4);
+                const rw = adjusted_img.width / (t.size.w - 2);
+                const rh = adjusted_img.height / (t.size.h - 4);
                 if (rw > rh) {
-                    new_h = original_img.height / (rw * 2);
+                    new_h = adjusted_img.height / (rw * 2);
                     new_w = t.size.w - 2;
                 } else {
                     new_h = (t.size.h - 4) / 2;
-                    new_w = original_img.width / rh;
+                    new_w = adjusted_img.width / rh;
                 }
-                img = try resizeImage(original_img, new_w, new_h);
+                img = try resizeImage(adjusted_img, new_w, new_h);
             }
             defer if (args.stretched) stb.stbi_image_free(img.data);
 
             t.stats = .{
-                .original_w = original_img.width,
-                .original_h = original_img.height,
+                .original_w = adjusted_img.width,
+                .original_h = adjusted_img.height,
                 .new_w = img.width,
                 .new_h = img.height,
             };
@@ -1421,7 +1376,7 @@ fn processImage(allocator: std.mem.Allocator, args: Args) !void {
         OutputType.Text => {
             // 1 : og
             // dr : grid
-            const img = try resizeImage(original_img, original_img.width, original_img.height / 2);
+            const img = try resizeImage(adjusted_img, adjusted_img.width, adjusted_img.height / 2);
             defer stb.free(img.data);
             const ascii_txt = try generateAsciiTxt(
                 allocator,
@@ -1454,7 +1409,7 @@ fn generateAsciiTxt(
         while (x < out_w) : (x += args.block_size) {
             const block_info = calculateBlockInfo(img, edge_result, x, y, out_w, out_h, args);
             const ascii_char = selectAsciiChar(block_info, args);
-            try ascii_text.append(ascii_char);
+            try ascii_text.appendSlice(ascii_char);
         }
         try ascii_text.append('\n');
     }
@@ -1588,7 +1543,7 @@ fn generateAsciiArt(
             const ascii_char = selectAsciiChar(block_info, args);
             const avg_color = calculateAverageColor(block_info, args);
 
-            convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color, args.block_size, args.color);
+            try convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color, args.block_size, args.color);
         }
     }
 
@@ -1641,7 +1596,7 @@ fn calculateBlockInfo(img: Image, edge_result: EdgeData, x: usize, y: usize, out
     return info;
 }
 
-fn selectAsciiChar(block_info: BlockInfo, args: Args) u8 {
+fn selectAsciiChar(block_info: BlockInfo, args: Args) []const u8 {
     const avg_brightness: usize = @intCast(block_info.sum_brightness / block_info.pixel_count);
     const boosted_brightness: usize = @intFromFloat(@as(f32, @floatFromInt(avg_brightness)) * args.brightness_boost);
     const clamped_brightness = std.math.clamp(boosted_brightness, 0, 255);
@@ -1650,11 +1605,15 @@ fn selectAsciiChar(block_info: BlockInfo, args: Args) u8 {
         const avg_mag: f32 = block_info.sum_mag / @as(f32, @floatFromInt(block_info.pixel_count));
         const avg_dir: f32 = block_info.sum_dir / @as(f32, @floatFromInt(block_info.pixel_count));
         if (getEdgeChar(avg_mag, avg_dir, args.threshold_disabled)) |ec| {
-            return ec;
+            return &[_]u8{ec};
         }
     }
 
-    return if (clamped_brightness == 0) ' ' else args.ascii_chars[(clamped_brightness * args.ascii_chars.len) / 256];
+    if (clamped_brightness == 0) return " ";
+
+    const char_index = (clamped_brightness * args.ascii_chars.len) / 256;
+    const selected_char = args.ascii_info[@min(char_index, args.ascii_info.len - 1)];
+    return args.ascii_chars[selected_char.start .. selected_char.start + selected_char.len];
 }
 
 fn calculateAverageColor(block_info: BlockInfo, args: Args) [3]u8 {

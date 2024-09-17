@@ -86,3 +86,19 @@ pub fn FrameBuffer(comptime T: type) type {
         }
     };
 }
+
+pub const AsciiCharInfo = struct { start: usize, len: u8 };
+
+pub fn initAsciiChars(allocator: std.mem.Allocator, ascii_chars: []const u8) ![]AsciiCharInfo {
+    var char_info = std.ArrayList(AsciiCharInfo).init(allocator);
+    defer char_info.deinit();
+
+    var i: usize = 0;
+    while (i < ascii_chars.len) {
+        const len = try std.unicode.utf8ByteSequenceLength(ascii_chars[i]);
+        try char_info.append(.{ .start = i, .len = @intCast(len) });
+        i += len;
+    }
+
+    return char_info.toOwnedSlice();
+}
