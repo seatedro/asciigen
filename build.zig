@@ -1,93 +1,154 @@
 const std = @import("std");
 
-const targets: []const std.Target.Query = &.{
-    .{ .cpu_arch = .aarch64, .os_tag = .macos },
-    .{ .cpu_arch = .x86_64, .os_tag = .macos },
-    .{ .cpu_arch = .aarch64, .os_tag = .linux },
-    .{ .cpu_arch = .x86_64, .os_tag = .linux },
-    .{ .cpu_arch = .x86_64, .os_tag = .windows },
-};
 pub fn build(b: *std.Build) !void {
-    // add a build option that checks if the user wants to build for all targets
-    const ci = b.option(bool, "ci", "Build for all targets") orelse false;
     const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseFast });
+    const target = b.standardTargetOptions(.{});
     const dep_stb = b.dependency("stb", .{});
-    if (ci) {
-        for (targets) |target| {
-            try buildCi(b, target, optimize, dep_stb);
-        }
-    } else {
-        const target = b.standardTargetOptionsQueryOnly(.{});
-        try runZig(b, target, optimize, dep_stb);
-    }
+
+    const stb_module = b.addModule("stb", .{
+        .root_source_file = b.path("external/stb.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    stb_module.addIncludePath(dep_stb.path(""));
+    stb_module.addCSourceFile(.{ .file = b.path("external/stb.c") });
+    const av_module = b.addModule("av", .{
+        .root_source_file = b.path("external/av.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    linkFfmpeg(av_module);
+    const libascii = b.addModule("libascii", .{
+        .root_source_file = b.path("src/core.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "stb", .module = stb_module },
+        },
+    });
+    const term_module = b.addModule("libascii:term", .{
+        .root_source_file = b.path("src/term.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "libascii", .module = libascii },
+        },
+    });
+    const video_module = b.addModule("libascii:video", .{
+        .root_source_file = b.path("src/video.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "stb", .module = stb_module },
+            .{ .name = "av", .module = av_module },
+            .{ .name = "libascii", .module = libascii },
+            .{ .name = "libascii:term", .module = term_module },
+        },
+    });
+    const image_module = b.addModule("libascii:image", .{
+        .root_source_file = b.path("src/image.zig"),
+        .imports = &.{
+            .{ .name = "stb", .module = stb_module },
+            .{ .name = "av", .module = av_module },
+            .{ .name = "libascii", .module = libascii },
+            .{ .name = "libascii:term", .module = term_module },
+        },
+    });
+    try runZig(
+        b,
+        target,
+        optimize,
+        libascii,
+        image_module,
+        video_module,
+        term_module,
+    );
 }
 
 fn setupExecutable(
     b: *std.Build,
     name: []const u8,
-    target: std.Target.Query,
+    target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    dep_stb: *std.Build.Dependency,
+    libascii: *std.Build.Module,
+    image_module: *std.Build.Module,
+    video_module: *std.Build.Module,
+    term_module: *std.Build.Module,
     link_libc: bool,
 ) !*std.Build.Step.Compile {
     const exe = b.addExecutable(.{
         .name = name,
         .root_source_file = b.path("src/main.zig"),
-        .target = b.resolveTargetQuery(target),
+        .target = target,
         .optimize = optimize,
         .link_libc = link_libc,
     });
 
     const clap = b.dependency("clap", .{});
     exe.root_module.addImport("clap", clap.module("clap"));
-
-    linkFfmpeg(exe);
-
-    exe.addCSourceFile(.{ .file = b.path("external/stb.c") });
-    exe.addIncludePath(dep_stb.path(""));
+    exe.root_module.addImport("libascii", libascii);
+    exe.root_module.addImport("libascii:image", image_module);
+    exe.root_module.addImport("libascii:video", video_module);
+    exe.root_module.addImport("libascii:term", term_module);
 
     return exe;
 }
 
-fn linkFfmpeg(exe: *std.Build.Step.Compile) void {
-    exe.linkSystemLibrary2("libavformat", .{ .use_pkg_config = .force });
-    exe.linkSystemLibrary2("libavcodec", .{ .use_pkg_config = .force });
-    exe.linkSystemLibrary2("libavutil", .{ .use_pkg_config = .force });
-    exe.linkSystemLibrary2("libswscale", .{ .use_pkg_config = .force });
-    exe.linkSystemLibrary2("libswresample", .{ .use_pkg_config = .force });
-}
-
-fn buildCi(
+fn setupTest(
     b: *std.Build,
-    target: std.Target.Query,
+    name: []const u8,
+    target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    dep_stb: *std.Build.Dependency,
-) !void {
-    const exe = try setupExecutable(b, "asciigen", target, optimize, dep_stb, true);
-
-    const target_output = b.addInstallArtifact(exe, .{
-        .dest_dir = .{
-            .override = .{
-                .custom = try target.zigTriple(b.allocator),
-            },
-        },
+    libascii: *std.Build.Module,
+    image_module: *std.Build.Module,
+    video_module: *std.Build.Module,
+    term_module: *std.Build.Module,
+    link_libc: bool,
+) !*std.Build.Step.Compile {
+    const unit_test = b.addTest(.{
+        .name = name,
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = link_libc,
     });
 
-    b.getInstallStep().dependOn(&target_output.step);
+    const clap = b.dependency("clap", .{});
+    unit_test.root_module.addImport("clap", clap.module("clap"));
+    unit_test.root_module.addImport("libascii", libascii);
+    unit_test.root_module.addImport("libascii:image", image_module);
+    unit_test.root_module.addImport("libascii:video", video_module);
+    unit_test.root_module.addImport("libascii:term", term_module);
+
+    return unit_test;
+}
+
+fn linkFfmpeg(lib: *std.Build.Module) void {
+    lib.linkSystemLibrary("libavformat", .{ .use_pkg_config = .force });
+    lib.linkSystemLibrary("libavcodec", .{ .use_pkg_config = .force });
+    lib.linkSystemLibrary("libavutil", .{ .use_pkg_config = .force });
+    lib.linkSystemLibrary("libswscale", .{ .use_pkg_config = .force });
+    lib.linkSystemLibrary("libswresample", .{ .use_pkg_config = .force });
 }
 
 fn runZig(
     b: *std.Build,
-    target: std.Target.Query,
+    target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    dep_stb: *std.Build.Dependency,
+    libascii: *std.Build.Module,
+    image_module: *std.Build.Module,
+    video_module: *std.Build.Module,
+    term_module: *std.Build.Module,
 ) !void {
     const exe = try setupExecutable(
         b,
         "asciigen",
         target,
         optimize,
-        dep_stb,
+        libascii,
+        image_module,
+        video_module,
+        term_module,
         true,
     );
 
@@ -96,7 +157,10 @@ fn runZig(
         "asciigen-check",
         target,
         optimize,
-        dep_stb,
+        libascii,
+        image_module,
+        video_module,
+        term_module,
         false,
     );
     const check_step = b.step("check", "Run the check");
@@ -113,15 +177,17 @@ fn runZig(
     run_step.dependOn(&run_cmd.step);
 
     const test_step = b.step("test", "Run the test");
-    const unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = b.resolveTargetQuery(target),
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    linkFfmpeg(unit_tests);
-    unit_tests.addCSourceFile(.{ .file = b.path("stb/stb.c") });
-    unit_tests.addIncludePath(dep_stb.path(""));
+    const unit_tests = try setupTest(
+        b,
+        "asciigen-check",
+        target,
+        optimize,
+        libascii,
+        image_module,
+        video_module,
+        term_module,
+        false,
+    );
     const run_unit_tests = b.addRunArtifact(unit_tests);
     test_step.dependOn(&run_unit_tests.step);
 }

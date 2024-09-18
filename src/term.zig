@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const util = @import("util.zig");
+const core = @import("libascii");
 
 pub const TermSize = struct {
     h: usize,
@@ -61,7 +61,7 @@ stdout: std.fs.File.Writer,
 stdin: std.fs.File.Reader,
 size: TermSize,
 ascii_chars: []const u8,
-ascii_info: []util.AsciiCharInfo,
+ascii_info: []core.AsciiCharInfo,
 stats: Stats,
 buf: []u8,
 buf_index: usize,
@@ -77,7 +77,7 @@ pub fn init(allocator: std.mem.Allocator, ascii_chars: []const u8) !Self {
     const stdin = std.io.getStdIn().reader();
     const size = try getTermSize(std.io.getStdOut().handle);
 
-    const ascii_info = try util.initAsciiChars(allocator, ascii_chars);
+    const ascii_info = try core.initAsciiChars(allocator, ascii_chars);
 
     const char_size = ascii_chars.len;
     const color_size = RGB_FG.len + 12;
@@ -148,25 +148,29 @@ fn writeToBuffer(self: *Self, s: []const u8) void {
     self.buf_len += s.len;
 }
 
-pub fn renderAsciiArt(
-    self: *Self,
+pub const RenderParams = struct {
     img: []const u8,
     width: usize,
     height: usize,
     channels: usize,
     color: bool,
     invert: bool,
+};
+pub fn renderAsciiArt(
+    self: *Self,
+    params: RenderParams,
 ) !void {
-    const v_padding: usize = (self.size.h - height - 1) / 2; // Account for top and bottom borders
+    const v_padding: usize = (self.size.h - params.height - 1) / 2; // Account for top and bottom borders
 
     var i: usize = 0;
     self.writeToBuffer(self.init_frame);
-    if (!color) {
+    if (!params.color) {
         self.writeToBuffer(WHITE_FG);
     }
     while (i < v_padding) : (i += 1) {
         self.writeToBuffer("\n");
     }
+
     // Print top border
     // for (0..h_padding) |_| self.writeToBuffer(" ");
     // self.writeToBuffer("┌");
@@ -175,24 +179,21 @@ pub fn renderAsciiArt(
 
     var timer = try std.time.Timer.start();
     var y: usize = 0;
-    while (y < height) : (y += 1) {
+    while (y < params.height) : (y += 1) {
         // for (0..h_padding) |_| self.writeToBuffer(" ");
         // self.writeToBuffer("│");
 
         var x: usize = 0;
-        while (x < width) : (x += 1) {
-            const idx = (y * width + x) * channels;
+        while (x < params.width) : (x += 1) {
+            const idx = (y * params.width + x) * params.channels;
 
-            const brightness = if (invert) 255 - img[idx] else img[idx];
-            const ascii_index = (brightness * self.ascii_info.len) / 256;
-            const selected_char = self.ascii_info[@min(ascii_index, self.ascii_info.len - 1)];
-            const ascii_char = self.ascii_chars[selected_char.start .. selected_char.start + selected_char.len];
+            const ascii_char = getAsciiChar(self, params, idx);
 
-            if (color) {
-                var r = img[idx];
-                var g = img[idx + 1];
-                var b = img[idx + 2];
-                if (invert) {
+            if (params.color) {
+                var r = params.img[idx];
+                var g = params.img[idx + 1];
+                var b = params.img[idx + 2];
+                if (params.invert) {
                     r = 255 - r;
                     g = 255 - g;
                     b = 255 - b;
@@ -234,9 +235,15 @@ pub fn renderAsciiArt(
     self.resetBuffer();
 }
 
-fn getAsciiChar(self: *Self, upper: u8, lower: u8) u8 {
-    const avg_brightness = (@as(u16, upper) + @as(u16, lower)) / 2;
-    return self.ascii_chars[avg_brightness * self.ascii_chars.len / 256];
+fn getAsciiChar(
+    self: *Self,
+    params: RenderParams,
+    idx: usize,
+) []const u8 {
+    const brightness = if (params.invert) 255 - params.img[idx] else params.img[idx];
+    const ascii_idx = (brightness * self.ascii_info.len) / 256;
+    const selected_char = self.ascii_info[@min(ascii_idx, self.ascii_info.len - 1)];
+    return self.ascii_chars[selected_char.start .. selected_char.start + selected_char.len];
 }
 
 fn flushBuffer(self: *Self) !void {
