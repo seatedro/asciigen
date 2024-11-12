@@ -1,8 +1,8 @@
 const std = @import("std");
 const stb = @import("stb");
-const core = @import("libascii");
+const core = @import("libglyph");
 const bitmap = core.bitmap;
-const term = @import("libascii:term");
+const term = @import("libglyphterm");
 
 // -----------------------
 // IMAGE PROCESSING FUNCTIONS

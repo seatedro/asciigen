@@ -1,10 +1,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const clap = @import("clap");
-const core = @import("libascii");
-const image = @import("libascii:image");
-const video = @import("libascii:video");
-const term = @import("libascii:term");
+const core = @import("libglyph");
+const image = @import("libglyphimg");
+const video = @import("libglyphav");
+const term = @import("libglyphterm");
 const bitmap = core.bitmap;
 
 const default_block = " .:coPO?@█";

@@ -18,7 +18,7 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
     linkFfmpeg(av_module);
-    const libascii = b.addModule("libascii", .{
+    const libglyph = b.addModule("libglyph", .{
         .root_source_file = b.path("src/core.zig"),
         .target = target,
         .optimize = optimize,
@@ -26,39 +26,39 @@ pub fn build(b: *std.Build) !void {
             .{ .name = "stb", .module = stb_module },
         },
     });
-    const term_module = b.addModule("libascii:term", .{
+    const term_module = b.addModule("libglyphterm", .{
         .root_source_file = b.path("src/term.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "libascii", .module = libascii },
+            .{ .name = "libglyph", .module = libglyph },
         },
     });
-    const video_module = b.addModule("libascii:video", .{
+    const video_module = b.addModule("libglyphav", .{
         .root_source_file = b.path("src/video.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "stb", .module = stb_module },
             .{ .name = "av", .module = av_module },
-            .{ .name = "libascii", .module = libascii },
-            .{ .name = "libascii:term", .module = term_module },
+            .{ .name = "libglyph", .module = libglyph },
+            .{ .name = "libglyphterm", .module = term_module },
         },
     });
-    const image_module = b.addModule("libascii:image", .{
+    const image_module = b.addModule("libglyphimg", .{
         .root_source_file = b.path("src/image.zig"),
         .imports = &.{
             .{ .name = "stb", .module = stb_module },
             .{ .name = "av", .module = av_module },
-            .{ .name = "libascii", .module = libascii },
-            .{ .name = "libascii:term", .module = term_module },
+            .{ .name = "libglyph", .module = libglyph },
+            .{ .name = "libglyphterm", .module = term_module },
         },
     });
     try runZig(
         b,
         target,
         optimize,
-        libascii,
+        libglyph,
         image_module,
         video_module,
         term_module,
@@ -70,7 +70,7 @@ fn setupExecutable(
     name: []const u8,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    libascii: *std.Build.Module,
+    libglyph: *std.Build.Module,
     image_module: *std.Build.Module,
     video_module: *std.Build.Module,
     term_module: *std.Build.Module,
@@ -86,10 +86,10 @@ fn setupExecutable(
 
     const clap = b.dependency("clap", .{});
     exe.root_module.addImport("clap", clap.module("clap"));
-    exe.root_module.addImport("libascii", libascii);
-    exe.root_module.addImport("libascii:image", image_module);
-    exe.root_module.addImport("libascii:video", video_module);
-    exe.root_module.addImport("libascii:term", term_module);
+    exe.root_module.addImport("libglyph", libglyph);
+    exe.root_module.addImport("libglyphimg", image_module);
+    exe.root_module.addImport("libglyphav", video_module);
+    exe.root_module.addImport("libglyphterm", term_module);
 
     return exe;
 }
@@ -99,7 +99,7 @@ fn setupTest(
     name: []const u8,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    libascii: *std.Build.Module,
+    libglyph: *std.Build.Module,
     image_module: *std.Build.Module,
     video_module: *std.Build.Module,
     term_module: *std.Build.Module,
@@ -115,10 +115,10 @@ fn setupTest(
 
     const clap = b.dependency("clap", .{});
     unit_test.root_module.addImport("clap", clap.module("clap"));
-    unit_test.root_module.addImport("libascii", libascii);
-    unit_test.root_module.addImport("libascii:image", image_module);
-    unit_test.root_module.addImport("libascii:video", video_module);
-    unit_test.root_module.addImport("libascii:term", term_module);
+    unit_test.root_module.addImport("libglyph", libglyph);
+    unit_test.root_module.addImport("libglyphimg", image_module);
+    unit_test.root_module.addImport("libglyphav", video_module);
+    unit_test.root_module.addImport("libglyphterm", term_module);
 
     return unit_test;
 }
@@ -135,7 +135,7 @@ fn runZig(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    libascii: *std.Build.Module,
+    libglyph: *std.Build.Module,
     image_module: *std.Build.Module,
     video_module: *std.Build.Module,
     term_module: *std.Build.Module,
@@ -145,7 +145,7 @@ fn runZig(
         "asciigen",
         target,
         optimize,
-        libascii,
+        libglyph,
         image_module,
         video_module,
         term_module,
@@ -157,7 +157,7 @@ fn runZig(
         "asciigen-check",
         target,
         optimize,
-        libascii,
+        libglyph,
         image_module,
         video_module,
         term_module,
@@ -182,7 +182,7 @@ fn runZig(
         "asciigen-check",
         target,
         optimize,
-        libascii,
+        libglyph,
         image_module,
         video_module,
         term_module,

@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const core = @import("libascii");
+const core = @import("libglyph");
 
 pub const TermSize = struct {
     h: usize,
