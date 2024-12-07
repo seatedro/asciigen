@@ -13,12 +13,12 @@ sudo apt-get install libavutil-dev libavformat-dev libavcodec-dev libswscale-dev
 
 on macos you would do
 ```bash
-brew install ffmpeg
+brew install ffmpeg pkg-config
 ```
 
 on windows:
 ```bash
-choco install ffmpeg-full
+choco install ffmpeg-full pkg-config
 ```
 
 
