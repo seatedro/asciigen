@@ -30,7 +30,7 @@ jobs:
 
       - name: Setup FFmpeg (macOS)
         if: runner.os == 'macOS'
-        run: brew install ffmpeg pkg-config
+        run: brew install ffmpeg pkg-config coreutils
 
       - name: Setup FFmpeg (Linux)
         if: runner.os == 'Linux'
@@ -54,6 +54,7 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    permissions: "write-all"
     steps:
       - uses: actions/download-artifact@v3
         with:
