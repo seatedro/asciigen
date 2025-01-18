@@ -35,13 +35,13 @@ or wait till i release the web app!
 
 ### build from source
 
-`zig build -Drelease`
+`zig build -Doptimize=ReleaseFast`
 
 the above command builds an executable found at `./zig-out/bin`
 
 if you want to just directly run the executable, run:
 
-`zig build run -Drelease -- [options]`
+`zig build run -Doptimize=ReleaseFast -- [options]`
 
 see below for explanations for available options
 
