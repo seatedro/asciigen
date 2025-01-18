@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseFast });
+    const strip = b.option(bool, "strip", "Omit debug information") orelse false;
     const target = b.standardTargetOptions(.{});
     const dep_stb = b.dependency("stb", .{});
 
@@ -58,6 +59,7 @@ pub fn build(b: *std.Build) !void {
         b,
         target,
         optimize,
+        strip,
         libglyph,
         image_module,
         video_module,
@@ -70,6 +72,7 @@ fn setupExecutable(
     name: []const u8,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    strip: bool,
     libglyph: *std.Build.Module,
     image_module: *std.Build.Module,
     video_module: *std.Build.Module,
@@ -81,6 +84,7 @@ fn setupExecutable(
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .strip = strip,
         .link_libc = link_libc,
     });
 
@@ -99,6 +103,7 @@ fn setupTest(
     name: []const u8,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    strip: bool,
     libglyph: *std.Build.Module,
     image_module: *std.Build.Module,
     video_module: *std.Build.Module,
@@ -110,6 +115,7 @@ fn setupTest(
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .strip = strip,
         .link_libc = link_libc,
     });
 
@@ -135,6 +141,7 @@ fn runZig(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    strip: bool,
     libglyph: *std.Build.Module,
     image_module: *std.Build.Module,
     video_module: *std.Build.Module,
@@ -145,6 +152,7 @@ fn runZig(
         "asciigen",
         target,
         optimize,
+        strip,
         libglyph,
         image_module,
         video_module,
@@ -157,6 +165,7 @@ fn runZig(
         "asciigen-check",
         target,
         optimize,
+        strip,
         libglyph,
         image_module,
         video_module,
@@ -182,6 +191,7 @@ fn runZig(
         "asciigen-check",
         target,
         optimize,
+        strip,
         libglyph,
         image_module,
         video_module,
