@@ -99,7 +99,7 @@ run the program with the following options (the default zig install directory is
    with brightness boost and url input:
    ```bash
    # bonus (this is a sweet wallpaper)
-   asciigen -i "https://w.wallhaven.cc/full/p9/wallhaven-p9gr2p.jpg" -o output.png -e -c-b 1.5
+   asciigen -i "https://w.wallhaven.cc/full/p9/wallhaven-p9gr2p.jpg" -o output.png -e -c -b 1.5
    ```
 
    terminal output (just omit the output option):
