@@ -41,7 +41,7 @@ jobs:
       - name: Build
         run: |
           mkdir -p artifacts
-          zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseFast -Dstrip=true
+          zig build -Doptimize=ReleaseFast -Dstrip=true
           tar czf artifacts/asciigen-${{ matrix.target }}.tar.gz -C zig-out/bin .
           cd artifacts && sha256sum asciigen-${{ matrix.target }}.tar.gz > asciigen-${{ matrix.target }}.tar.gz.sha256
 
