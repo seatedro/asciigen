@@ -1,67 +1,68 @@
-name: Build, Release, and Update Homebrew
+name: Build and Release
 
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 jobs:
   build:
-    name: Build for all targets
-    runs-on: macos-latest
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-macos
+          - os: macos-13
+            target: x86_64-macos
+          - os: ubuntu-latest
+            target: x86_64-linux
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Zig
-      uses: goto-bus-stop/setup-zig@v2
-      with:
-        version: 0.13.0
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.13.0
 
-    - name: Install FFmpeg
-      run: |
-        brew install ffmpeg
+      - name: Setup FFmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg pkg-config
 
-    - name: Build for all targets
-      run: |
-        zig build -Drelease -Dci=true
+      - name: Setup FFmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev pkg-config
 
-    - name: Prepare release assets
-      run: |
-        mkdir release_assets
-        cd zig-out
-        for dir in */; do
-          target=${dir%/}
-          tar cvzf ../release_assets/asciigen-$target.tar.gz $target
-          (cd ../release_assets && sha256sum asciigen-$target.tar.gz > asciigen-$target.tar.gz.sha256)
-        done
+      - name: Build
+        run: |
+          mkdir -p artifacts
+          zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseFast -Dstrip=true
+          tar czf artifacts/asciigen-${{ matrix.target }}.tar.gz -C zig-out/bin .
+          cd artifacts && sha256sum asciigen-${{ matrix.target }}.tar.gz > asciigen-${{ matrix.target }}.tar.gz.sha256
 
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v3
-      with:
-        name: release-assets
-        path: release_assets/*
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: build-artifacts
+          path: artifacts/
 
   release:
-    name: Create Release and Update Homebrew
-    permissions:
-      contents: write
     needs: build
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - uses: actions/download-artifact@v3
+        with:
+          name: build-artifacts
+          path: artifacts
 
-    - name: Download artifacts
-      uses: actions/download-artifact@v3
-      with:
-        name: release-assets
-        path: release_assets
-
-    - name: Release
-      uses: softprops/action-gh-release@v2
-      with:
-        files: release_assets/*
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

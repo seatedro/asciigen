@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) !void {
-    const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseFast });
+    const optimize = b.standardOptimizeOption(.{});
     const strip = b.option(bool, "strip", "Omit debug information") orelse false;
     const target = b.standardTargetOptions(.{});
     const dep_stb = b.dependency("stb", .{});
