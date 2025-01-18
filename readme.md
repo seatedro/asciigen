@@ -18,7 +18,7 @@ sudo apt-get install libavutil-dev libavformat-dev libavcodec-dev libswscale-dev
 
 on macos you would do
 ```bash
-brew install ffmpeg pkg-config
+brew install ffmpeg pkgconf
 ```
 
 on windows:
@@ -97,7 +97,7 @@ run the program with the following options (the default zig install directory is
    asciigen -i input.png -o output.png -c
    ```
 
-   with edge detection, color, and custom downscale: 
+   with edge detection, color, and custom downscale:
    ```bash
    asciigen -i input.jpeg -o output.png -s 4 -e -c
    ```
@@ -114,7 +114,7 @@ run the program with the following options (the default zig install directory is
    ```
 
    ### Video
-   
+
    with an input video (no urls allowed):
    ```bash
    asciigen -i /path/to/input/video.mp4 -o ascii.mp4 --codec hevc_nvenc --keep_audio

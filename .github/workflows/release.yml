@@ -30,7 +30,7 @@ jobs:
 
       - name: Setup FFmpeg (macOS)
         if: runner.os == 'macOS'
-        run: brew install ffmpeg pkg-config coreutils
+        run: brew install ffmpeg pkgconf coreutils
 
       - name: Setup FFmpeg (Linux)
         if: runner.os == 'Linux'
