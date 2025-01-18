@@ -32,6 +32,8 @@ pub const EdgeData = struct {
     direction: []f32,
 };
 
+pub const DitherType = enum { FloydSteinberg, None };
+
 pub const CoreParams = struct {
     input: []const u8,
     output: ?[]const u8,
@@ -53,6 +55,9 @@ pub const CoreParams = struct {
     ffmpeg_options: std.StringHashMap([]const u8),
     keep_audio: bool,
     codec: ?[]const u8,
+    dither: ?DitherType,
+    bg_color: ?[3]u8,
+    fg_color: ?[3]u8,
 
     pub fn deinit(self: *CoreParams) void {
         var it = self.ffmpeg_options.iterator();
@@ -430,14 +435,15 @@ fn convertToAscii(
     color: [3]u8,
     block_size: u8,
     color_enabled: bool,
+    args: CoreParams,
 ) !void {
     const bm = &(try bitmap.getCharSet(ascii_char));
     const block_w = @min(block_size, w - x);
     const block_h = @min(block_size, img.len / (w * 3) - y);
 
     // Define new colors
-    const background_color = [3]u8{ 21, 9, 27 }; // Blackcurrant
-    const text_color = [3]u8{ 211, 106, 111 }; // Indian Red
+    const background_color = if (args.bg_color != null) args.bg_color.? else [3]u8{ 21, 9, 27 }; // Blackcurrant
+    const text_color = if (args.fg_color != null) args.fg_color.? else [3]u8{ 211, 106, 111 }; // Indian Red
 
     var dy: usize = 0;
     while (dy < block_h) : (dy += 1) {
@@ -487,20 +493,110 @@ pub fn generateAsciiArt(
     const out_w = (img.width / args.block_size) * args.block_size;
     const out_h = (img.height / args.block_size) * args.block_size;
 
+    // Dithering error
+    var curr_ditherr = if (args.dither != .None)
+        try allocator.alloc(u32, out_w)
+    else
+        null;
+    var next_ditherr = if (args.dither != .None)
+        try allocator.alloc(u32, out_w)
+    else
+        null;
+    defer if (curr_ditherr) |buf| allocator.free(buf);
+    defer if (next_ditherr) |buf| allocator.free(buf);
+
+    // Initialize error buffers to 0 if they exist
+    if (curr_ditherr) |buf| @memset(buf, 0);
+    if (next_ditherr) |buf| @memset(buf, 0);
+
     const ascii_img = try allocator.alloc(u8, out_w * out_h * 3);
     @memset(ascii_img, 0);
 
     var y: usize = 0;
     while (y < out_h) : (y += args.block_size) {
+        @memset(next_ditherr.?, 0);
         var x: usize = 0;
         while (x < out_w) : (x += args.block_size) {
-            const block_info = calculateBlockInfo(img, edge_result, x, y, out_w, out_h, args);
+            var block_info = calculateBlockInfo(img, edge_result, x, y, out_w, out_h, args);
+
+            if (args.dither != .None) {
+                const avg_brightness: u8 = @as(u8, @intCast(block_info.sum_brightness / block_info.pixel_count));
+
+                const adjusted_brightness = @as(u32, @intCast(avg_brightness)) +
+                    (if (curr_ditherr) |buf| buf[x / args.block_size] else 0);
+
+                const clamped_brightness = @as(u8, @intCast(std.math.clamp(adjusted_brightness, 0, 255)));
+
+                const closest = findClosestBrightness(clamped_brightness, args.ascii_chars, args.ascii_info);
+
+                switch (args.dither.?) {
+                    DitherType.FloydSteinberg => floydSteinberg(
+                        curr_ditherr.?,
+                        next_ditherr.?,
+                        @as(u8, @intCast(x)) / args.block_size,
+                        @as(u8, @intCast(out_w)) / args.block_size,
+                        closest[1],
+                    ),
+                    DitherType.None => {},
+                }
+
+                block_info.sum_brightness = @as(u64, closest[0]) * block_info.pixel_count;
+            }
+
             const ascii_char = selectAsciiChar(block_info, args);
             const avg_color = calculateAverageColor(block_info, args);
 
-            try convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color, args.block_size, args.color);
+            try convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color, args.block_size, args.color, args);
+        }
+
+        if (curr_ditherr != null and next_ditherr != null) {
+            const t = curr_ditherr;
+            curr_ditherr = next_ditherr;
+            next_ditherr = t;
+            if (next_ditherr) |buf| @memset(buf, 0);
         }
     }
 
     return ascii_img;
+}
+
+//-----------------Dithering Functions-----------------------
+fn findClosestBrightness(
+    desired: u8,
+    ascii_chars: []const u8,
+    ascii_info: []const AsciiCharInfo,
+) struct { u8, u32 } {
+    const brightness = @as(u32, @intCast(desired));
+
+    const char_index = (desired * ascii_chars.len) / 256;
+    const selected_char = @min(char_index, ascii_info.len - 1);
+
+    const quantized: u32 = @as(u32, @intCast(selected_char)) * (256 / @as(u32, @intCast(ascii_info.len)));
+
+    return .{
+        @as(u8, @intCast(quantized)),
+        brightness - quantized,
+    };
+}
+
+/// Original Floyd Steinberg dithering algorithm
+/// _ X 7
+/// 3 5 1
+///
+/// (/16)
+fn floydSteinberg(
+    curr: []u32,
+    next: []u32,
+    x: u8,
+    w: u8,
+    quant_error: u32,
+) void {
+    if (x + 1 < w) {
+        curr[x + 1] += (quant_error * 7) >> 4;
+        next[x + 1] += (quant_error) >> 4;
+    }
+    if (x > 0) {
+        next[x - 1] += (quant_error * 3) >> 4;
+    }
+    next[x] += (quant_error * 5) >> 4;
 }

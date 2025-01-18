@@ -4,6 +4,11 @@ converts images/video to ascii art
 
 ## installation
 
+### brew
+```bash
+brew install asciigen
+```
+
 make sure you have ffmpeg installed (along with the respective headers)
 
 usually on linux you just install the headers like so:
@@ -56,6 +61,7 @@ run the program with the following options (the default zig install directory is
    - `-e, --detect_edges`: enable edge detection (optional)
    - `    --sigma1 <float>`: set the sigma1 value for DoG filter (optional, default: 0.3)
    - `    --sigma2 <float>`: set the sigma2 value for DoG filter (optional, default: 1.0)
+   - `    --dither floydstein`: enable dithering (currently only supports floydstein algorithm)
    - `-b, --brightness_boost <float>`: increase/decrease perceived brightness (optional, default: 1.0)
    advanced options:
    - `    --full_characters`: Uses all ascii characters in generated output.

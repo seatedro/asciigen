@@ -34,6 +34,9 @@ fn parseArgs(allocator: std.mem.Allocator) !core.CoreParams {
         \\    --keep_audio               Keeps the audio if input is a video
         \\    --stretched                Resizes media to fit terminal window
         \\-f, --frame_rate <f32>         Target frame rate for video output (default: matches input fps)
+        \\-d, --dither <str>             Dithering, supported values: "floydstein" (default: "floydstein")
+        \\    --fg <str>                 Enter a hex value like "#ffffff" for the foreground color (default: "#d36a6f")
+        \\    --bg <str>                 Enter a hex value like "#000000" for the background color (default: "#15091b")
         \\<str>...
     );
 
@@ -100,6 +103,30 @@ fn parseArgs(allocator: std.mem.Allocator) !core.CoreParams {
 
     const ascii_info = try core.initAsciiChars(allocator, ascii_chars);
 
+    const dither = blk: {
+        if (res.args.dither != null) {
+            if (std.mem.eql(u8, res.args.dither.?, "floydstein")) {
+                break :blk core.DitherType.FloydSteinberg;
+            } else {
+                break :blk core.DitherType.None;
+            }
+        } else {
+            break :blk core.DitherType.None;
+        }
+    };
+
+    const fg_color = blk: {
+        if (res.args.fg != null) {
+            break :blk try hexToRgb(res.args.fg.?);
+        } else break :blk null;
+    };
+
+    const bg_color = blk: {
+        if (res.args.bg != null) {
+            break :blk try hexToRgb(res.args.bg.?);
+        } else break :blk null;
+    };
+
     return core.CoreParams{
         .input = res.args.input.?,
         .output_type = output_type,
@@ -121,6 +148,9 @@ fn parseArgs(allocator: std.mem.Allocator) !core.CoreParams {
         .ffmpeg_options = ffmpeg_options,
         .frame_rate = res.args.frame_rate,
         .stretched = res.args.stretched != 0,
+        .dither = dither,
+        .fg_color = fg_color,
+        .bg_color = bg_color,
     };
 }
 
@@ -176,6 +206,15 @@ fn sortCharsBySize(allocator: std.mem.Allocator, input: []const u8) ![]const u8 
     }
 
     return result.toOwnedSlice();
+}
+
+fn hexToRgb(hex: []const u8) ![3]u8 {
+    if (hex[0] != '#') return error.InvalidHexString;
+    if (hex.len != 7) return error.InvalidHexString;
+    const r = try std.fmt.parseInt(u8, hex[1..3], 16);
+    const g = try std.fmt.parseInt(u8, hex[3..5], 16);
+    const b = try std.fmt.parseInt(u8, hex[5..7], 16);
+    return .{ r, g, b };
 }
 
 // -----------------------
