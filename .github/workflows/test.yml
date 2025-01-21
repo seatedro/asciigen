@@ -38,11 +38,11 @@ jobs:
     - name: Build and Test
       run: |
         if [ "${{ matrix.os }}" = "windows-latest" ]; then
-          zig build -Drelease -Dtarget=${{ matrix.arch }}-windows test
+          zig build --release=fast -Dtarget=${{ matrix.arch }}-windows test
         elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-          zig build -Drelease -Dtarget=${{ matrix.arch }}-linux test
+          zig build --release=fast -Dtarget=${{ matrix.arch }}-linux test
         elif [[ "${{ matrix.os }}" == macos* ]]; then
-          zig build -Drelease -Dtarget=${{ matrix.arch }}-macos test
+          zig build --release=fast -Dtarget=${{ matrix.arch }}-macos test
         fi
       shell: bash
 
