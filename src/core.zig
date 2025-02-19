@@ -514,7 +514,9 @@ pub fn generateAsciiArt(
 
     var y: usize = 0;
     while (y < out_h) : (y += args.block_size) {
-        @memset(next_ditherr.?, 0);
+        if (args.dither != .None) {
+            @memset(next_ditherr.?, 0);
+        }
         var x: usize = 0;
         while (x < out_w) : (x += args.block_size) {
             var block_info = calculateBlockInfo(img, edge_result, x, y, out_w, out_h, args);

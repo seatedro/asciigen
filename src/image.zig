@@ -64,6 +64,9 @@ fn loadImage(allocator: std.mem.Allocator, path: []const u8) !core.Image {
         stb.stbi_load_from_memory(image_data.ptr, @intCast(image_data.len), &w, &h, &chan, 0)
     else
         stb.stbi_load(path.ptr, &w, &h, &chan, 0);
+    var rgb_data = allocator.alloc(u8, @as(usize, @intCast(w * h * 3))) catch return error.OutOfMemory;
+
+    defer stb.stbi_image_free(data);
 
     if (@intFromPtr(data) == 0) {
         std.debug.print("Error loading image: {s}\n", .{path});
@@ -72,44 +75,37 @@ fn loadImage(allocator: std.mem.Allocator, path: []const u8) !core.Image {
 
     const ext = std.fs.path.extension(path);
     if (std.mem.eql(u8, ext, ".png")) {
-        defer stb.stbi_image_free(data);
-        // Create a temporary file for the re-encoded image
-        var tmp_path_buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-        const ts = std.time.timestamp();
-        const tmp_path = try std.fmt.bufPrintZ(&tmp_path_buf, "asciigen-tmp-{d}.jpg", .{ts});
 
-        // Re-encode the image as JPEG
-        const write_result = stb.stbi_write_jpg(
-            tmp_path.ptr,
-            w,
-            h,
-            chan,
-            data,
-            100, // quality
-        );
-        if (write_result == 0) {
-            return error.ImageReEncodeFailed;
+        // If image has 4 channels (RGBA), strip the alpha channel
+        if (chan == 4) {
+            var i: usize = 0;
+            var j: usize = 0;
+            while (i < @as(usize, @intCast(w * h * 4))) : (i += 4) {
+                rgb_data[j] = data[i]; // R
+                rgb_data[j + 1] = data[i + 1]; // G
+                rgb_data[j + 2] = data[i + 2]; // B
+                j += 3;
+            }
+
+            return core.Image{
+                .data = rgb_data.ptr,
+                .width = @intCast(w),
+                .height = @intCast(h),
+                .channels = 3,
+            };
         }
 
-        // Load the re-encoded image
-        const reencoded_data = stb.stbi_load(tmp_path.ptr, &w, &h, &chan, 0);
-        if (@intFromPtr(reencoded_data) == 0) {
-            std.debug.print("Error loading re-encoded image\n", .{});
-            return error.ImageLoadFailed;
-        }
-
-        // Delete the temporary file
-        std.fs.deleteFileAbsolute(tmp_path) catch |err| {
-            std.debug.print("Warning: Failed to delete temporary file: {}\n", .{err});
-        };
+        @memcpy(rgb_data.ptr, data[0..(@as(usize, @intCast(w * h * 3)))]);
 
         return core.Image{
-            .data = reencoded_data,
+            .data = rgb_data.ptr,
             .width = @intCast(w),
             .height = @intCast(h),
             .channels = @intCast(chan),
         };
     }
+
+    @memcpy(rgb_data.ptr, data[0..(@as(usize, @intCast(w * h * chan)))]);
 
     return core.Image{
         .data = data,
@@ -213,7 +209,7 @@ fn saveOutputImage(ascii_img: []u8, img: core.Image, args: core.CoreParams) !voi
 
 pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
     const original_img = try loadAndScaleImage(allocator, args);
-    defer stb.stbi_image_free(original_img.data);
+    // defer stb.stbi_image_free(original_img.data);
 
     const adjusted_data = if (args.auto_adjust)
         try core.autoBrightnessContrast(allocator, original_img, 1.0)
@@ -229,11 +225,11 @@ pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
     defer allocator.free(adjusted_data);
 
     const edge_result = try core.detectEdges(allocator, adjusted_img, args.sigma1, args.sigma2);
-    defer if (args.detect_edges) {
+    defer {
         allocator.free(edge_result.grayscale);
         allocator.free(edge_result.magnitude);
         allocator.free(edge_result.direction);
-    };
+    }
 
     switch (args.output_type) {
         core.OutputType.Image => {
