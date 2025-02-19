@@ -225,11 +225,11 @@ pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
     defer allocator.free(adjusted_data);
 
     const edge_result = try core.detectEdges(allocator, adjusted_img, args.sigma1, args.sigma2);
-    defer {
+    defer if (args.detect_edges) {
         allocator.free(edge_result.grayscale);
         allocator.free(edge_result.magnitude);
         allocator.free(edge_result.direction);
-    }
+    };
 
     switch (args.output_type) {
         core.OutputType.Image => {
