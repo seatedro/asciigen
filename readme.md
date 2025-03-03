@@ -1,4 +1,4 @@
-# ascii from media
+# glyph - ascii from media
 
 converts images/video to ascii art
 
@@ -6,7 +6,7 @@ converts images/video to ascii art
 
 ### brew
 ```bash
-brew install asciigen
+brew install glyph
 ```
 
 make sure you have ffmpeg installed (along with the respective headers)
@@ -49,7 +49,7 @@ see below for explanations for available options
 
 run the program with the following options (the default zig install directory is `./zig-out/bin`):
    ```
-   /path/to/asciigen [options]
+   /path/to/glyph [options]
    ```
 1. options:
    - `-h, --help`: print the help message and exit
@@ -84,61 +84,59 @@ run the program with the following options (the default zig install directory is
 
    basic usage:
    ```bash
-   asciigen -i input.jpg -o output.png
+   glyph -i input.jpg -o output.png
    ```
 
    text file output:
    ```bash
-   asciigen -i input.jpg -o output.txt
+   glyph -i input.jpg -o output.txt
    ```
 
    using color:
    ```bash
-   asciigen -i input.png -o output.png -c
+   glyph -i input.png -o output.png -c
    ```
 
    with edge detection, color, and custom downscale:
    ```bash
-   asciigen -i input.jpeg -o output.png -s 4 -e -c
+   glyph -i input.jpeg -o output.png -s 4 -e -c
    ```
 
    with brightness boost and url input:
    ```bash
    # bonus (this is a sweet wallpaper)
-   asciigen -i "https://w.wallhaven.cc/full/p9/wallhaven-p9gr2p.jpg" -o output.png -e -c -b 1.5
+   glyph -i "https://w.wallhaven.cc/full/p9/wallhaven-p9gr2p.jpg" -o output.png -e -c -b 1.5
    ```
 
    terminal output (just omit the output option):
    ```bash
-   asciigen -i "https://w.wallhaven.cc/full/p9/wallhaven-p9gr2p.jpg" -e -c -b 1.5
+   glyph -i "https://w.wallhaven.cc/full/p9/wallhaven-p9gr2p.jpg" -e -c -b 1.5
    ```
 
    ### Video
 
    with an input video (no urls allowed):
    ```bash
-   asciigen -i /path/to/input/video.mp4 -o ascii.mp4 --codec hevc_nvenc --keep_audio
+   glyph -i /path/to/input/video.mp4 -o ascii.mp4 --codec hevc_nvenc --keep_audio
    ```
 
    with an input video and rendering on the terminal (stretched to fit terminal):
    ```bash
-   asciigen -i /path/to/input/video.mp4 --stretched -c
+   glyph -i /path/to/input/video.mp4 --stretched -c
    ```
 
    with input video and custom ffmpeg encoder options:
    ```bash
-   asciigen -i /path/to/input/video.mp4 -o ascii.mp4 -c --codec libx264 --keep_audio-- -preset fast -crf 20
+   glyph -i /path/to/input/video.mp4 -o ascii.mp4 -c --codec libx264 --keep_audio-- -preset fast -crf 20
    ```
 
    with input video and custom ffmpeg encoder options:
    ```bash
-   asciigen -i /path/to/input/video.mp4 -o ascii.mp4 -c --codec libx264 --keep_audio-- -preset fast -crf 20
+   glyph -i /path/to/input/video.mp4 -o ascii.mp4 -c --codec libx264 --keep_audio-- -preset fast -crf 20
    ```
 
-4. the program will generate an ascii art version of your input media and save it as a new media file.
+3. the program will generate an ascii art version of your input media and save it as a new media file.
 
 for images: output file needs to be a `.png` since i saw some weird issues with jpegs.
-
-the zig version is the only one i'll be working on from here on. the c code was just to get me started until i figured out some issues with the build.zig
 
 4. using the long arguments on windows may or may not work. please use the short arguments for now.

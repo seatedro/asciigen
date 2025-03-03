@@ -149,7 +149,7 @@ fn runZig(
 ) !void {
     const exe = try setupExecutable(
         b,
-        "asciigen",
+        "glyph",
         target,
         optimize,
         strip,
@@ -162,7 +162,7 @@ fn runZig(
 
     const exe_check = try setupExecutable(
         b,
-        "asciigen-check",
+        "glyph-check",
         target,
         optimize,
         strip,
@@ -188,7 +188,7 @@ fn runZig(
     const test_step = b.step("test", "Run the test");
     const unit_tests = try setupTest(
         b,
-        "asciigen-check",
+        "glyph-check",
         target,
         optimize,
         strip,

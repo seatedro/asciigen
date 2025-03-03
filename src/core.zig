@@ -72,7 +72,7 @@ pub const CoreParams = struct {
 pub const AsciiCharInfo = struct { start: usize, len: u8 };
 
 // -----------------------
-// CORE ASCIIGEN FUNCTIONS
+// CORE GLYPH FUNCTIONS
 // -----------------------
 
 pub fn initAsciiChars(allocator: std.mem.Allocator, ascii_chars: []const u8) ![]AsciiCharInfo {
