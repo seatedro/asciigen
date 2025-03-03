@@ -15,7 +15,7 @@ pub const SymbolType = enum {
 };
 
 pub const Image = struct {
-    data: [*]u8,
+    data: []u8,
     width: usize,
     height: usize,
     channels: usize,
@@ -111,25 +111,33 @@ pub fn selectAsciiChar(block_info: BlockInfo, args: CoreParams) []const u8 {
 
 pub fn rgbToGrayScale(allocator: std.mem.Allocator, img: Image) ![]u8 {
     const grayscale_img = try allocator.alloc(u8, img.width * img.height);
+    errdefer allocator.free(grayscale_img);
+
     for (0..img.height) |y| {
         for (0..img.width) |x| {
             const i = (y * img.width + x) * img.channels;
+            if (i + 2 >= img.width * img.height * img.channels) {
+                continue; // Skip if accessing out of bounds
+            }
             const r = img.data[i];
             const g = img.data[i + 1];
             const b = img.data[i + 2];
-            grayscale_img[y * img.width + x] = @intFromFloat((0.299 * @as(f32, @floatFromInt(r)) + 0.587 * @as(f32, @floatFromInt(g)) + 0.114 * @as(f32, @floatFromInt(b))));
+            grayscale_img[y * img.width + x] = @intFromFloat((0.299 * @as(f32, @floatFromInt(r)) +
+                0.587 * @as(f32, @floatFromInt(g)) +
+                0.114 * @as(f32, @floatFromInt(b))));
         }
     }
     return grayscale_img;
 }
 
 pub fn resizeImage(
+    allocator: std.mem.Allocator,
     img: Image,
     new_width: usize,
     new_height: usize,
 ) !Image {
     const resized_data = stb.stbir_resize_uint8_linear(
-        img.data,
+        img.data.ptr,
         @intCast(img.width),
         @intCast(img.height),
         0,
@@ -144,8 +152,18 @@ pub fn resizeImage(
         return error.ImageResizeFailed;
     }
 
+    defer stb.stbi_image_free(img.data.ptr);
+
+    const total_pixels = new_width * new_height;
+    const buffer_size = total_pixels * (if (img.channels == 4) @as(usize, 3) else img.channels);
+
+    const scaled_data = try allocator.alloc(u8, buffer_size);
+    errdefer allocator.free(scaled_data);
+
+    @memcpy(scaled_data, resized_data[0..buffer_size]);
+
     return Image{
-        .data = resized_data,
+        .data = scaled_data,
         .width = new_width,
         .height = new_height,
         .channels = img.channels,
@@ -281,23 +299,51 @@ pub fn applySobelFilter(allocator: std.mem.Allocator, img: Image) !SobelFilter {
     const Gy = [_][3]i32{ .{ -1, -2, -1 }, .{ 0, 0, 0 }, .{ 1, 2, 1 } };
 
     var mag = try allocator.alloc(f32, img.width * img.height);
-    var dir = try allocator.alloc(f32, img.width * img.height);
+    errdefer allocator.free(mag);
 
-    for (1..img.height - 1) |y| {
-        for (1..img.width - 1) |x| {
+    var dir = try allocator.alloc(f32, img.width * img.height);
+    errdefer allocator.free(dir);
+
+    // Initialize arrays to avoid uninitialized memory
+    @memset(mag, 0);
+    @memset(dir, 0);
+
+    // Skip edge processing if image is too small
+    if (img.width < 3 or img.height < 3) {
+        return SobelFilter{
+            .magnitude = mag,
+            .direction = dir,
+        };
+    }
+
+    // Handle bounds to prevent integer overflow
+    const height_max = if (img.height > 0) img.height - 1 else 0;
+    const width_max = if (img.width > 0) img.width - 1 else 0;
+
+    // Process the inner part of the image (skip borders)
+    var y: usize = 1;
+    while (y < height_max) : (y += 1) {
+        var x: usize = 1;
+        while (x < width_max) : (x += 1) {
             var gx: f32 = 0;
             var gy: f32 = 0;
 
             for (0..3) |i| {
                 for (0..3) |j| {
-                    const pixel = img.data[(y + i - 1) * img.width + (x + j - 1)];
-                    gx += @as(f32, @floatFromInt(Gx[i][j])) * @as(f32, @floatFromInt(pixel));
-                    gy += @as(f32, @floatFromInt(Gy[i][j])) * @as(f32, @floatFromInt(pixel));
+                    const pixel_idx = (y + i - 1) * img.width + (x + j - 1);
+                    if (pixel_idx < img.width * img.height) {
+                        const pixel = img.data[pixel_idx];
+                        gx += @as(f32, @floatFromInt(Gx[i][j])) * @as(f32, @floatFromInt(pixel));
+                        gy += @as(f32, @floatFromInt(Gy[i][j])) * @as(f32, @floatFromInt(pixel));
+                    }
                 }
             }
 
-            mag[y * img.width + x] = @sqrt(gx * gx + gy * gy);
-            dir[y * img.width + x] = std.math.atan2(gy, gx); // The lord's function
+            const idx = y * img.width + x;
+            if (idx < img.width * img.height) {
+                mag[idx] = @sqrt(gx * gx + gy * gy);
+                dir[idx] = std.math.atan2(gy, gx);
+            }
         }
     }
 
@@ -323,26 +369,54 @@ pub fn getEdgeChar(mag: f32, dir: f32, threshold_disabled: bool) ?u8 {
     };
 }
 
-pub fn detectEdges(allocator: std.mem.Allocator, img: Image, sigma1: f32, sigma2: f32) !EdgeData {
-    // if (!args.detect_edges) {
-    //     return .{ .grayscale = &[_]u8{}, .magnitude = &[_]f32{}, .direction = &[_]f32{} };
-    // }
+pub fn detectEdges(allocator: std.mem.Allocator, img: Image, detect_edges: bool, sigma1: f32, sigma2: f32) !EdgeData {
+    if (!detect_edges) {
+        return .{ .grayscale = &[_]u8{}, .magnitude = &[_]f32{}, .direction = &[_]f32{} };
+    }
+
+    // Handle invalid image dimensions
+    if (img.width == 0 or img.height == 0) {
+        const empty_u8 = try allocator.alloc(u8, 0);
+        const empty_f32_1 = try allocator.alloc(f32, 0);
+        const empty_f32_2 = try allocator.alloc(f32, 0);
+
+        return .{
+            .grayscale = empty_u8,
+            .magnitude = empty_f32_1,
+            .direction = empty_f32_2,
+        };
+    }
 
     const grayscale_img = try rgbToGrayScale(allocator, img);
+    errdefer allocator.free(grayscale_img);
+
+    // Validate grayscale image
+    if (grayscale_img.len == 0) {
+        const empty_f32_1 = try allocator.alloc(f32, 0);
+        const empty_f32_2 = try allocator.alloc(f32, 0);
+
+        return .{
+            .grayscale = grayscale_img,
+            .magnitude = empty_f32_1,
+            .direction = empty_f32_2,
+        };
+    }
+
     const dog_img = try differenceOfGaussians(allocator, .{
-        .data = grayscale_img.ptr,
+        .data = grayscale_img,
         .width = img.width,
         .height = img.height,
-        .channels = img.channels,
+        .channels = 1, // Important fix: grayscale is 1 channel, not `img.channels`
     }, sigma1, sigma2);
     defer allocator.free(dog_img);
 
     const edge_result = try applySobelFilter(allocator, .{
-        .data = dog_img.ptr,
+        .data = dog_img,
         .width = img.width,
         .height = img.height,
         .channels = 1,
     });
+    // No defer free as these are returned in EdgeData
 
     return .{
         .grayscale = grayscale_img,

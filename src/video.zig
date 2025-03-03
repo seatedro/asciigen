@@ -408,7 +408,7 @@ pub fn processVideo(allocator: std.mem.Allocator, args: core.CoreParams) !void {
 
     while (true) {
         const f = frame_buf.pop() orelse break;
-        defer stb.stbi_image_free(f.data);
+        defer stb.stbi_image_free(f.data.ptr);
 
         const target_time: i128 = start_time + (@as(i128, processed_frames) * @as(i128, frame_time_ns));
         const curr_time = std.time.nanoTimestamp();
@@ -436,7 +436,7 @@ pub fn processVideo(allocator: std.mem.Allocator, args: core.CoreParams) !void {
             f.data[0 .. f.width * f.height * f.channels];
 
         const adjusted_img = core.Image{
-            .data = adjusted_data.ptr,
+            .data = adjusted_data,
             .width = f.width,
             .height = f.height,
             .channels = f.channels,
@@ -457,7 +457,7 @@ pub fn processVideo(allocator: std.mem.Allocator, args: core.CoreParams) !void {
     }
 
     for (frames.items) |f| {
-        stb.stbi_image_free(f.data);
+        stb.stbi_image_free(f.data.ptr);
     }
 
     const avg_time = t.stats.total_time.? / @as(u128, t.stats.frame_count.?);
@@ -653,12 +653,12 @@ fn producerTask(
                     defer allocator.free(frame_data);
                     @memcpy(frame_data, rgb_frame.*.data[0][0..frame_size]);
                     const f = core.Image{
-                        .data = frame_data.ptr,
+                        .data = frame_data,
                         .width = @intCast(rgb_frame.*.width),
                         .height = @intCast(rgb_frame.*.height),
                         .channels = 3,
                     };
-                    const resized_img = try core.resizeImage(f, t.size.w, t.size.h - 4);
+                    const resized_img = try core.resizeImage(allocator, f, t.size.w, t.size.h - 4);
                     try frame_buf.push(resized_img);
                     if (frame_count == frame_buf.max_size) {
                         frame_buf.setReady();
@@ -698,26 +698,27 @@ fn producerTask(
 
 fn convertFrameToAscii(allocator: std.mem.Allocator, frame: *av.AVFrame, args: core.CoreParams) !void {
     const img = core.Image{
-        .data = frame.data[0],
+        .data = frame.data[0][0 .. @as(usize, @intCast(frame.linesize[0])) * @as(usize, @intCast(frame.height))],
         .width = @intCast(frame.width),
         .height = @intCast(frame.height),
         .channels = 3,
     };
 
+    const expected_size = img.width * img.height * img.channels;
     const adjusted_data = if (args.auto_adjust)
         try core.autoBrightnessContrast(allocator, img, 1.0)
     else
-        img.data[0 .. img.width * img.height * img.channels];
+        try allocator.dupe(u8, @as([*]u8, @ptrCast(img.data))[0..expected_size]);
 
     const adjusted_img = core.Image{
-        .data = adjusted_data.ptr,
+        .data = adjusted_data,
         .width = img.width,
         .height = img.height,
         .channels = img.channels,
     };
     defer if (args.auto_adjust) allocator.free(adjusted_data);
 
-    const edge_result = try core.detectEdges(allocator, adjusted_img, args.sigma1, args.sigma2);
+    const edge_result = try core.detectEdges(allocator, adjusted_img, args.detect_edges, args.sigma1, args.sigma2);
     defer if (args.detect_edges) {
         allocator.free(edge_result.grayscale);
         allocator.free(edge_result.magnitude);

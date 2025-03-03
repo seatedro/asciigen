@@ -64,23 +64,35 @@ fn loadImage(allocator: std.mem.Allocator, path: []const u8) !core.Image {
         stb.stbi_load_from_memory(image_data.ptr, @intCast(image_data.len), &w, &h, &chan, 0)
     else
         stb.stbi_load(path.ptr, &w, &h, &chan, 0);
-    var rgb_data = allocator.alloc(u8, @as(usize, @intCast(w * h * 3))) catch return error.OutOfMemory;
-
-    defer stb.stbi_image_free(data);
 
     if (@intFromPtr(data) == 0) {
         std.debug.print("Error loading image: {s}\n", .{path});
         return error.ImageLoadFailed;
     }
 
+    defer stb.stbi_image_free(data);
+
+    // Make sure w, h, and chan are valid to prevent integer overflow
+    if (w <= 0 or h <= 0 or chan <= 0) {
+        std.debug.print("Invalid image dimensions: w={d}, h={d}, chan={d}\n", .{ w, h, chan });
+        return error.InvalidImageDimensions;
+    }
+
+    // Validate buffer size to prevent overflow
+    const total_pixels = @as(usize, @intCast(w)) * @as(usize, @intCast(h));
+    const pixel_size = @as(usize, @intCast(chan));
+    const buffer_size = total_pixels * (if (chan == 4) @as(usize, 3) else pixel_size);
+
+    var rgb_data = try allocator.alloc(u8, buffer_size);
+    errdefer allocator.free(rgb_data);
+
     const ext = std.fs.path.extension(path);
     if (std.mem.eql(u8, ext, ".png")) {
-
         // If image has 4 channels (RGBA), strip the alpha channel
         if (chan == 4) {
             var i: usize = 0;
             var j: usize = 0;
-            while (i < @as(usize, @intCast(w * h * 4))) : (i += 4) {
+            while (i < total_pixels * 4) : (i += 4) {
                 rgb_data[j] = data[i]; // R
                 rgb_data[j + 1] = data[i + 1]; // G
                 rgb_data[j + 2] = data[i + 2]; // B
@@ -88,27 +100,27 @@ fn loadImage(allocator: std.mem.Allocator, path: []const u8) !core.Image {
             }
 
             return core.Image{
-                .data = rgb_data.ptr,
+                .data = rgb_data,
                 .width = @intCast(w),
                 .height = @intCast(h),
                 .channels = 3,
             };
         }
 
-        @memcpy(rgb_data.ptr, data[0..(@as(usize, @intCast(w * h * 3)))]);
+        @memcpy(rgb_data, data[0 .. total_pixels * @as(usize, @intCast(chan))]);
 
         return core.Image{
-            .data = rgb_data.ptr,
+            .data = rgb_data,
             .width = @intCast(w),
             .height = @intCast(h),
             .channels = @intCast(chan),
         };
     }
 
-    @memcpy(rgb_data.ptr, data[0..(@as(usize, @intCast(w * h * chan)))]);
+    @memcpy(rgb_data, data[0 .. total_pixels * @as(usize, @intCast(chan))]);
 
     return core.Image{
-        .data = data,
+        .data = rgb_data,
         .width = @intCast(w),
         .height = @intCast(h),
         .channels = @intCast(chan),
@@ -122,18 +134,26 @@ fn loadAndScaleImage(allocator: std.mem.Allocator, args: core.CoreParams) !core.
     };
 
     if (args.scale != 1.0 and args.scale > 0.0) {
-        return scaleImage(original_img, args.scale);
+        // Need to free the original image data after scaling
+        defer allocator.free(original_img.data);
+        return scaleImage(allocator, original_img, args.scale);
     } else {
         return original_img;
     }
 }
 
-fn scaleImage(img: core.Image, scale: f32) !core.Image {
+fn scaleImage(allocator: std.mem.Allocator, img: core.Image, scale: f32) !core.Image {
     const img_w = @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(img.width)) / scale)));
     const img_h = @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(img.height)) / scale)));
 
+    const total_pixels = img_w * img_h;
+    const buffer_size = total_pixels * (if (img.channels == 4) @as(usize, 3) else img.channels);
+
+    const scaled_data = try allocator.alloc(u8, buffer_size);
+    errdefer allocator.free(scaled_data);
+
     const scaled_img = stb.stbir_resize_uint8_linear(
-        img.data,
+        img.data.ptr,
         @intCast(img.width),
         @intCast(img.height),
         0,
@@ -148,8 +168,12 @@ fn scaleImage(img: core.Image, scale: f32) !core.Image {
         return error.ImageScaleFailed;
     }
 
+    defer stb.stbi_image_free(img.data.ptr);
+
+    @memcpy(scaled_data, scaled_img[0..buffer_size]);
+
     return core.Image{
-        .data = scaled_img,
+        .data = scaled_data,
         .width = img_w,
         .height = img_h,
         .channels = img.channels,
@@ -209,22 +233,29 @@ fn saveOutputImage(ascii_img: []u8, img: core.Image, args: core.CoreParams) !voi
 
 pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
     const original_img = try loadAndScaleImage(allocator, args);
-    // defer stb.stbi_image_free(original_img.data);
+    defer allocator.free(original_img.data); // We now consistently use allocator for all image data
 
+    // Safety check for image dimensions
+    if (original_img.width == 0 or original_img.height == 0) {
+        std.debug.print("Error: Invalid image dimensions\n", .{});
+        return error.InvalidImageDimensions;
+    }
+
+    const expected_size = original_img.width * original_img.height * original_img.channels;
     const adjusted_data = if (args.auto_adjust)
         try core.autoBrightnessContrast(allocator, original_img, 1.0)
     else
-        original_img.data[0 .. original_img.width * original_img.height * original_img.channels];
+        try allocator.dupe(u8, original_img.data[0..expected_size]);
 
     const adjusted_img = core.Image{
-        .data = adjusted_data.ptr,
+        .data = adjusted_data,
         .width = original_img.width,
         .height = original_img.height,
         .channels = original_img.channels,
     };
     defer allocator.free(adjusted_data);
 
-    const edge_result = try core.detectEdges(allocator, adjusted_img, args.sigma1, args.sigma2);
+    const edge_result = try core.detectEdges(allocator, adjusted_img, args.detect_edges, args.sigma1, args.sigma2);
     defer if (args.detect_edges) {
         allocator.free(edge_result.grayscale);
         allocator.free(edge_result.magnitude);
@@ -248,7 +279,7 @@ pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
 
             var img: core.Image = undefined;
             if (args.stretched) {
-                img = try core.resizeImage(adjusted_img, t.size.w - 2, t.size.h - 4);
+                img = try core.resizeImage(allocator, adjusted_img, t.size.w - 2, t.size.h - 4);
             } else {
                 var new_w: usize = 0;
                 var new_h: usize = 0;
@@ -261,9 +292,9 @@ pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
                     new_h = (t.size.h - 4) / 2;
                     new_w = adjusted_img.width / rh;
                 }
-                img = try core.resizeImage(adjusted_img, new_w, new_h);
+                img = try core.resizeImage(allocator, adjusted_img, new_w, new_h);
             }
-            defer if (args.stretched) stb.stbi_image_free(img.data);
+            defer if (args.stretched) allocator.free(img.data);
 
             t.stats = .{
                 .original_w = adjusted_img.width,
@@ -292,8 +323,8 @@ pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
         core.OutputType.Text => {
             // 1 : og
             // dr : grid
-            const img = try core.resizeImage(adjusted_img, adjusted_img.width, adjusted_img.height / 2);
-            defer stb.free(img.data);
+            const img = try core.resizeImage(allocator, adjusted_img, adjusted_img.width, adjusted_img.height / 2);
+            defer allocator.free(img.data);
             const ascii_txt = try generateAsciiTxt(
                 allocator,
                 img,
