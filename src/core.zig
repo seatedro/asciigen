@@ -130,37 +130,33 @@ pub fn rgbToGrayScale(allocator: std.mem.Allocator, img: Image) ![]u8 {
     return grayscale_img;
 }
 
-pub fn resizeImage(
-    allocator: std.mem.Allocator,
-    img: Image,
-    new_width: usize,
-    new_height: usize,
-) !Image {
-    const resized_data = stb.stbir_resize_uint8_linear(
+pub fn resizeImage(allocator: std.mem.Allocator, img: Image, new_width: usize, new_height: usize) !Image {
+    // Safety checks
+    if (img.width == 0 or img.height == 0 or new_width == 0 or new_height == 0) {
+        return error.InvalidDimensions;
+    }
+
+    const total_pixels = new_width * new_height;
+    const buffer_size = total_pixels * img.channels;
+
+    const scaled_data = try allocator.alloc(u8, buffer_size);
+    errdefer allocator.free(scaled_data);
+
+    const result = stb.stbir_resize_uint8_linear(
         img.data.ptr,
         @intCast(img.width),
         @intCast(img.height),
         0,
-        0,
+        scaled_data.ptr,
         @intCast(new_width),
         @intCast(new_height),
         0,
         @intCast(img.channels),
     );
 
-    if (resized_data == null) {
+    if (result == 0) {
         return error.ImageResizeFailed;
     }
-
-    defer stb.stbi_image_free(img.data.ptr);
-
-    const total_pixels = new_width * new_height;
-    const buffer_size = total_pixels * (if (img.channels == 4) @as(usize, 3) else img.channels);
-
-    const scaled_data = try allocator.alloc(u8, buffer_size);
-    errdefer allocator.free(scaled_data);
-
-    @memcpy(scaled_data, resized_data[0..buffer_size]);
 
     return Image{
         .data = scaled_data,

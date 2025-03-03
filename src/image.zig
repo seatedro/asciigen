@@ -168,8 +168,6 @@ fn scaleImage(allocator: std.mem.Allocator, img: core.Image, scale: f32) !core.I
         return error.ImageScaleFailed;
     }
 
-    defer stb.stbi_image_free(img.data.ptr);
-
     @memcpy(scaled_data, scaled_img[0..buffer_size]);
 
     return core.Image{
