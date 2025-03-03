@@ -40,29 +40,29 @@ jobs:
 
       - name: Build
         run: |
-          mkdir -p artifacts
           zig build -Doptimize=ReleaseFast -Dstrip=true
-          tar czf artifacts/asciigen-${{ matrix.target }}.tar.gz -C zig-out/bin .
-          cd artifacts && sha256sum asciigen-${{ matrix.target }}.tar.gz > asciigen-${{ matrix.target }}.tar.gz.sha256
+          tar czf glyph-${{ matrix.target }}.tar.gz -C zig-out/bin .
+          sha256sum glyph-${{ matrix.target }}.tar.gz > glyph-${{ matrix.target }}.tar.gz.sha256
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: build-artifacts
-          path: artifacts/
+          name: build-artifacts-${{ matrix.target }}
+          path: glyph-*
 
   release:
     needs: build
     runs-on: ubuntu-latest
     permissions: "write-all"
     steps:
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
         with:
-          name: build-artifacts
+          pattern: build-artifacts-*
           path: artifacts
+          merge-multiple: true
 
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
         env:
