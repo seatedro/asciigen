@@ -143,8 +143,11 @@ fn loadAndScaleImage(allocator: std.mem.Allocator, args: core.CoreParams) !core.
 }
 
 fn scaleImage(allocator: std.mem.Allocator, img: core.Image, scale: f32) !core.Image {
-    const img_w = @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(img.width)) / scale)));
-    const img_h = @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(img.height)) / scale)));
+    var img_w = @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(img.width)) / scale)));
+    var img_h = @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(img.height)) / scale)));
+
+    img_w = @max(img_w, 1);
+    img_h = @max(img_h, 1);
 
     const total_pixels = img_w * img_h;
     const buffer_size = total_pixels * (if (img.channels == 4) @as(usize, 3) else img.channels);
@@ -184,11 +187,13 @@ fn generateAsciiTxt(
     edge_result: core.EdgeData,
     args: core.CoreParams,
 ) ![]u8 {
-    const out_w = (img.width / args.block_size) * args.block_size;
-    const out_h = (img.height / args.block_size) * args.block_size;
+    var out_w = (img.width / args.block_size) * args.block_size;
+    var out_h = (img.height / args.block_size) * args.block_size;
+
+    out_w = @max(out_w, 1);
+    out_h = @max(out_h, 1);
 
     var ascii_text = std.ArrayList(u8).init(allocator);
-    defer ascii_text.deinit();
 
     var y: usize = 0;
     while (y < out_h) : (y += args.block_size) {
@@ -212,8 +217,11 @@ fn saveOutputTxt(ascii_text: []const u8, args: core.CoreParams) !void {
 }
 
 fn saveOutputImage(ascii_img: []u8, img: core.Image, args: core.CoreParams) !void {
-    const out_w = (img.width / args.block_size) * args.block_size;
-    const out_h = (img.height / args.block_size) * args.block_size;
+    var out_w = (img.width / args.block_size) * args.block_size;
+    var out_h = (img.height / args.block_size) * args.block_size;
+
+    out_w = @max(out_w, 1);
+    out_h = @max(out_h, 1);
 
     const save_result = stb.stbi_write_png(
         @ptrCast(args.output.?.ptr),
@@ -275,12 +283,12 @@ pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
             var t = try term.init(allocator, args.ascii_chars);
             defer t.deinit();
 
-            var img: core.Image = undefined;
+            var new_w: usize = 0;
+            var new_h: usize = 0;
             if (args.stretched) {
-                img = try core.resizeImage(allocator, adjusted_img, t.size.w - 2, t.size.h - 4);
+                new_w = t.size.w - 2;
+                new_h = t.size.h - 4;
             } else {
-                var new_w: usize = 0;
-                var new_h: usize = 0;
                 const rw = adjusted_img.width / (t.size.w - 2);
                 const rh = adjusted_img.height / (t.size.h - 4);
                 if (rw > rh) {
@@ -290,8 +298,11 @@ pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
                     new_h = (t.size.h - 4) / 2;
                     new_w = adjusted_img.width / rh;
                 }
-                img = try core.resizeImage(allocator, adjusted_img, new_w, new_h);
             }
+            new_w = @max(new_w, 1);
+            new_h = @max(new_h, 1);
+
+            const img = try core.resizeImage(allocator, adjusted_img, new_w, new_h);
             defer if (args.stretched) allocator.free(img.data);
 
             t.stats = .{
@@ -321,8 +332,13 @@ pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
         core.OutputType.Text => {
             // 1 : og
             // dr : grid
-            const img = try core.resizeImage(allocator, adjusted_img, adjusted_img.width, adjusted_img.height / 2);
-            defer allocator.free(img.data);
+            var img: core.Image = adjusted_img;
+            var h = adjusted_img.height;
+            const w = adjusted_img.width;
+            if (adjusted_img.height >= 2) {
+                h = adjusted_img.height / 2;
+                img = try core.resizeImage(allocator, adjusted_img, w, h);
+            }
             const ascii_txt = try generateAsciiTxt(
                 allocator,
                 img,

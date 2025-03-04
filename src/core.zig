@@ -560,8 +560,11 @@ pub fn generateAsciiArt(
     edge_result: EdgeData,
     args: CoreParams,
 ) ![]u8 {
-    const out_w = (img.width / args.block_size) * args.block_size;
-    const out_h = (img.height / args.block_size) * args.block_size;
+    var out_w = (img.width / args.block_size) * args.block_size;
+    var out_h = (img.height / args.block_size) * args.block_size;
+
+    out_w = @max(out_w, 1);
+    out_h = @max(out_h, 1);
 
     // Dithering error
     var curr_ditherr = if (args.dither != .None)

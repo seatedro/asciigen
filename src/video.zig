@@ -505,8 +505,8 @@ fn producerTask(
     const output_pix_fmt = av.AV_PIX_FMT_RGB24;
 
     rgb_frame.*.format = output_pix_fmt;
-    rgb_frame.*.width = @divFloor(dec_ctx.*.width, args.block_size) * args.block_size;
-    rgb_frame.*.height = @divFloor(dec_ctx.*.height, args.block_size) * args.block_size;
+    rgb_frame.*.width = @max(@divFloor(dec_ctx.*.width, args.block_size) * args.block_size, 1);
+    rgb_frame.*.height = @max(@divFloor(dec_ctx.*.height, args.block_size) * args.block_size, 1);
     if (av.av_frame_get_buffer(rgb_frame, 0) < 0) {
         return error.FailedToAllocFrameBuf;
     }
