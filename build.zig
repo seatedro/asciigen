@@ -1,4 +1,17 @@
 const std = @import("std");
+const Build = std.Build;
+const Module = Build.Module;
+const Version = std.SemanticVersion;
+
+const BuildOptions = struct {
+    libglyph: *Module,
+    stb: *Module,
+    term: *Module,
+    libav: *Module,
+    video: *Module,
+    img: *Module,
+    version: Version,
+};
 
 pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
@@ -6,15 +19,17 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const dep_stb = b.dependency("stb", .{});
 
+    const version = try Version.parse("1.0.11");
+
     const stb_module = b.addModule("stb", .{
-        .root_source_file = b.path("external/stb.zig"),
+        .root_source_file = b.path("vendor/stb.zig"),
         .target = target,
         .optimize = optimize,
     });
     stb_module.addIncludePath(dep_stb.path(""));
-    stb_module.addCSourceFile(.{ .file = b.path("external/stb.c") });
+    stb_module.addCSourceFile(.{ .file = b.path("vendor/stb.c") });
     const av_module = b.addModule("av", .{
-        .root_source_file = b.path("external/av.zig"),
+        .root_source_file = b.path("vendor/av.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -27,6 +42,7 @@ pub fn build(b: *std.Build) !void {
             .{ .name = "stb", .module = stb_module },
         },
     });
+
     const term_module = b.addModule("libglyphterm", .{
         .root_source_file = b.path("src/term.zig"),
         .target = target,
@@ -55,28 +71,33 @@ pub fn build(b: *std.Build) !void {
             .{ .name = "libglyphterm", .module = term_module },
         },
     });
+
+    const buildOpts = &BuildOptions{
+        .libglyph = libglyph,
+        .stb = stb_module,
+        .term = term_module,
+        .img = image_module,
+        .libav = av_module,
+        .video = video_module,
+        .version = version,
+    };
+
     try runZig(
+        buildOpts,
         b,
         target,
         optimize,
         strip,
-        libglyph,
-        image_module,
-        video_module,
-        term_module,
     );
 }
 
 fn setupExecutable(
+    self: *const BuildOptions,
     b: *std.Build,
     name: []const u8,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     strip: bool,
-    libglyph: *std.Build.Module,
-    image_module: *std.Build.Module,
-    video_module: *std.Build.Module,
-    term_module: *std.Build.Module,
     link_libc: bool,
 ) !*std.Build.Step.Compile {
     const exe = b.addExecutable(.{
@@ -87,27 +108,25 @@ fn setupExecutable(
         .strip = strip,
         .link_libc = link_libc,
     });
+    exe.root_module.addImport("build_options", buildOptionsModule(self, b));
 
     const clap = b.dependency("clap", .{});
     exe.root_module.addImport("clap", clap.module("clap"));
-    exe.root_module.addImport("libglyph", libglyph);
-    exe.root_module.addImport("libglyphimg", image_module);
-    exe.root_module.addImport("libglyphav", video_module);
-    exe.root_module.addImport("libglyphterm", term_module);
+    exe.root_module.addImport("libglyph", self.libglyph);
+    exe.root_module.addImport("libglyphimg", self.img);
+    exe.root_module.addImport("libglyphav", self.video);
+    exe.root_module.addImport("libglyphterm", self.term);
 
     return exe;
 }
 
 fn setupTest(
+    self: *const BuildOptions,
     b: *std.Build,
     name: []const u8,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     strip: bool,
-    libglyph: *std.Build.Module,
-    image_module: *std.Build.Module,
-    video_module: *std.Build.Module,
-    term_module: *std.Build.Module,
     link_libc: bool,
 ) !*std.Build.Step.Compile {
     const unit_test = b.addTest(.{
@@ -121,15 +140,15 @@ fn setupTest(
 
     const clap = b.dependency("clap", .{});
     unit_test.root_module.addImport("clap", clap.module("clap"));
-    unit_test.root_module.addImport("libglyph", libglyph);
-    unit_test.root_module.addImport("libglyphimg", image_module);
-    unit_test.root_module.addImport("libglyphav", video_module);
-    unit_test.root_module.addImport("libglyphterm", term_module);
+    unit_test.root_module.addImport("libglyph", self.libglyph);
+    unit_test.root_module.addImport("libglyphimg", self.img);
+    unit_test.root_module.addImport("libglyphav", self.video);
+    unit_test.root_module.addImport("libglyphterm", self.term);
 
     return unit_test;
 }
 
-fn linkFfmpeg(lib: *std.Build.Module) void {
+fn linkFfmpeg(lib: *Module) void {
     lib.linkSystemLibrary("libavformat", .{ .use_pkg_config = .force });
     lib.linkSystemLibrary("libavcodec", .{ .use_pkg_config = .force });
     lib.linkSystemLibrary("libavutil", .{ .use_pkg_config = .force });
@@ -138,38 +157,29 @@ fn linkFfmpeg(lib: *std.Build.Module) void {
 }
 
 fn runZig(
+    self: *const BuildOptions,
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     strip: bool,
-    libglyph: *std.Build.Module,
-    image_module: *std.Build.Module,
-    video_module: *std.Build.Module,
-    term_module: *std.Build.Module,
 ) !void {
     const exe = try setupExecutable(
+        self,
         b,
         "glyph",
         target,
         optimize,
         strip,
-        libglyph,
-        image_module,
-        video_module,
-        term_module,
         true,
     );
 
     const exe_check = try setupExecutable(
+        self,
         b,
         "glyph-check",
         target,
         optimize,
         strip,
-        libglyph,
-        image_module,
-        video_module,
-        term_module,
         false,
     );
     const check_step = b.step("check", "Run the check");
@@ -187,17 +197,23 @@ fn runZig(
 
     const test_step = b.step("test", "Run the test");
     const unit_tests = try setupTest(
+        self,
         b,
         "glyph-check",
         target,
         optimize,
         strip,
-        libglyph,
-        image_module,
-        video_module,
-        term_module,
         false,
     );
     const run_unit_tests = b.addRunArtifact(unit_tests);
     test_step.dependOn(&run_unit_tests.step);
+}
+
+fn buildOptionsModule(self: *const BuildOptions, b: *std.Build) *Module {
+    var opts = b.addOptions();
+
+    opts.addOption(std.SemanticVersion, "version", self.version);
+
+    const mod = opts.createModule();
+    return mod;
 }

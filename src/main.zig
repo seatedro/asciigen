@@ -6,6 +6,9 @@ const image = @import("libglyphimg");
 const video = @import("libglyphav");
 const term = @import("libglyphterm");
 const bitmap = core.bitmap;
+const build_options = @import("build_options");
+const version = build_options.version;
+const version_string = std.fmt.comptimePrint("{d}.{d}.{d}", .{ version.major, version.minor, version.patch });
 
 const default_block = " .:coPO?@█";
 const default_ascii = " .:-=+*%@#";
@@ -14,6 +17,7 @@ const full_characters = " .-:=+iltIcsv1x%7aejorzfnuCJT3*69LYpqy25SbdgFGOVXkPhmw4
 fn parseArgs(allocator: std.mem.Allocator) !core.CoreParams {
     const params = comptime clap.parseParamsComptime(
         \\-h, --help                     Print this help message and exit
+        \\-v, --version                  Prints the version and exit
         \\-i, --input <str>              Input media file (img, video)
         \\-o, --output <str>             Output file (img, video, txt)
         \\-c, --color                    Use color ASCII characters
@@ -52,6 +56,11 @@ fn parseArgs(allocator: std.mem.Allocator) !core.CoreParams {
 
     if (res.args.help != 0) {
         try clap.help(std.io.getStdOut().writer(), clap.Help, &params, .{});
+        std.process.exit(0);
+    }
+
+    if (res.args.version != 0) {
+        try std.io.getStdOut().writer().writeAll(version_string ++ "\n");
         std.process.exit(0);
     }
 
