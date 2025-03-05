@@ -719,14 +719,8 @@ fn convertFrameToAscii(allocator: std.mem.Allocator, frame: *av.AVFrame, args: c
     defer if (args.auto_adjust) allocator.free(adjusted_data);
 
     const edge_result = try core.detectEdges(allocator, adjusted_img, args.detect_edges, args.sigma1, args.sigma2);
-    defer if (args.detect_edges) {
-        allocator.free(edge_result.grayscale);
-        allocator.free(edge_result.magnitude);
-        allocator.free(edge_result.direction);
-    };
 
     const ascii_img = try core.generateAsciiArt(allocator, adjusted_img, edge_result, args);
-    defer allocator.free(ascii_img);
 
     // Copy ascii art back to frame
     const out_w = (adjusted_img.width / args.block_size) * args.block_size;

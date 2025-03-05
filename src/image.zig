@@ -235,7 +235,6 @@ fn saveOutputImage(ascii_img: []u8, img: core.Image, args: core.CoreParams) !voi
 
 pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
     const original_img = try loadAndScaleImage(allocator, args);
-    defer allocator.free(original_img.data); // We now consistently use allocator for all image data
 
     // Safety check for image dimensions
     if (original_img.width == 0 or original_img.height == 0) {
@@ -255,14 +254,8 @@ pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
         .height = original_img.height,
         .channels = original_img.channels,
     };
-    defer allocator.free(adjusted_data);
 
     const edge_result = try core.detectEdges(allocator, adjusted_img, args.detect_edges, args.sigma1, args.sigma2);
-    defer if (args.detect_edges) {
-        allocator.free(edge_result.grayscale);
-        allocator.free(edge_result.magnitude);
-        allocator.free(edge_result.direction);
-    };
 
     switch (args.output_type) {
         core.OutputType.Image => {
@@ -272,12 +265,10 @@ pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
                 edge_result,
                 args,
             );
-            defer allocator.free(ascii_img);
             try saveOutputImage(ascii_img, adjusted_img, args);
         },
         core.OutputType.Stdout => {
             var t = try term.init(allocator, args.ascii_chars);
-            defer t.deinit();
 
             var new_w: usize = 0;
             var new_h: usize = 0;
@@ -299,7 +290,6 @@ pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
             new_h = @max(new_h, 1);
 
             const img = try core.resizeImage(allocator, adjusted_img, new_w, new_h);
-            defer if (args.stretched) allocator.free(img.data);
 
             t.stats = .{
                 .original_w = adjusted_img.width,
@@ -341,7 +331,6 @@ pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
                 edge_result,
                 args,
             );
-            defer allocator.free(ascii_txt);
             try saveOutputTxt(ascii_txt, args);
         },
         else => {},

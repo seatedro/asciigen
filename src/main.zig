@@ -232,12 +232,11 @@ fn hexToRgb(hex: []const u8) ![3]u8 {
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
 
-    var args = try parseArgs(allocator);
-    defer args.deinit();
-    defer allocator.free(args.ascii_info);
+    const args = try parseArgs(allocator);
 
     if (video.isVideoFile(args.input)) {
         try video.processVideo(allocator, args);

@@ -365,9 +365,9 @@ pub fn getEdgeChar(mag: f32, dir: f32, threshold_disabled: bool) ?u8 {
     };
 }
 
-pub fn detectEdges(allocator: std.mem.Allocator, img: Image, detect_edges: bool, sigma1: f32, sigma2: f32) !EdgeData {
+pub fn detectEdges(allocator: std.mem.Allocator, img: Image, detect_edges: bool, sigma1: f32, sigma2: f32) !?EdgeData {
     if (!detect_edges) {
-        return .{ .grayscale = &[_]u8{}, .magnitude = &[_]f32{}, .direction = &[_]f32{} };
+        return null;
     }
 
     // Handle invalid image dimensions
@@ -557,7 +557,7 @@ fn convertToAscii(
 pub fn generateAsciiArt(
     allocator: std.mem.Allocator,
     img: Image,
-    edge_result: EdgeData,
+    edge_result: ?EdgeData,
     args: CoreParams,
 ) ![]u8 {
     var out_w = (img.width / args.block_size) * args.block_size;
