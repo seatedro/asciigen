@@ -49,16 +49,9 @@ jobs:
       run: |
         choco install ffmpeg-full
 
-    - name: Build and Test
+    - name: Test
       run: |
-        if [ "${{ matrix.os }}" = "windows-latest" ]; then
-          zig build -Doptimize=ReleaseFast -Dtarget=${{ matrix.arch }}-windows test
-        elif [ "${{ matrix.os }}" == "ubuntu*" ]; then
-          zig build -Doptimize=ReleaseFast -Dtarget=${{ matrix.arch }}-linux test
-        elif [[ "${{ matrix.os }}" == macos* ]]; then
-          zig build -Doptimize=ReleaseFast -Dtarget=${{ matrix.arch }}-macos test
-        fi
-      shell: bash
+        zig build -Doptimize=ReleaseFast test
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4

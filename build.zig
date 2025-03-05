@@ -33,7 +33,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
-    linkFfmpeg(av_module);
+    linkFfmpeg(av_module, target);
     const libglyph = b.addModule("libglyph", .{
         .root_source_file = b.path("src/core.zig"),
         .target = target,
@@ -147,12 +147,20 @@ fn setupTest(
     return unit_test;
 }
 
-fn linkFfmpeg(lib: *Module) void {
-    lib.linkSystemLibrary("libavformat", .{ .use_pkg_config = .force });
-    lib.linkSystemLibrary("libavcodec", .{ .use_pkg_config = .force });
-    lib.linkSystemLibrary("libavutil", .{ .use_pkg_config = .force });
-    lib.linkSystemLibrary("libswscale", .{ .use_pkg_config = .force });
-    lib.linkSystemLibrary("libswresample", .{ .use_pkg_config = .force });
+fn linkFfmpeg(lib: *Module, target: std.Build.ResolvedTarget) void {
+    if (target.result.os.tag == .windows) {
+        lib.linkSystemLibrary("libavformat", .{});
+        lib.linkSystemLibrary("libavcodec", .{});
+        lib.linkSystemLibrary("libavutil", .{});
+        lib.linkSystemLibrary("libswscale", .{});
+        lib.linkSystemLibrary("libswresample", .{});
+    } else {
+        lib.linkSystemLibrary("libavformat", .{ .use_pkg_config = .force });
+        lib.linkSystemLibrary("libavcodec", .{ .use_pkg_config = .force });
+        lib.linkSystemLibrary("libavutil", .{ .use_pkg_config = .force });
+        lib.linkSystemLibrary("libswscale", .{ .use_pkg_config = .force });
+        lib.linkSystemLibrary("libswresample", .{ .use_pkg_config = .force });
+    }
 }
 
 fn runZig(
