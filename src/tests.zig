@@ -7,8 +7,7 @@ const stb = core.stb;
 
 test "loadImage - png" {
     const allocator = std.testing.allocator;
-    const test_path = "test_image.png";
-    defer std.fs.cwd().deleteFile(test_path) catch {};
+    const test_path = "test_img.png";
 
     const img = try image.loadImage(allocator, test_path);
     defer allocator.free(img.data);
