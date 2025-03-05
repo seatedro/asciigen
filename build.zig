@@ -148,11 +148,11 @@ fn setupTest(
 
 fn linkFfmpeg(lib: *Module, target: std.Build.ResolvedTarget) void {
     if (target.result.os.tag == .windows) {
-        lib.linkSystemLibrary("libavformat", .{});
-        lib.linkSystemLibrary("libavcodec", .{});
-        lib.linkSystemLibrary("libavutil", .{});
-        lib.linkSystemLibrary("libswscale", .{});
-        lib.linkSystemLibrary("libswresample", .{});
+        lib.linkSystemLibrary("avformat", .{});
+        lib.linkSystemLibrary("avcodec", .{});
+        lib.linkSystemLibrary("avutil", .{});
+        lib.linkSystemLibrary("swscale", .{});
+        lib.linkSystemLibrary("swresample", .{});
     } else {
         lib.linkSystemLibrary("libavformat", .{ .use_pkg_config = .force });
         lib.linkSystemLibrary("libavcodec", .{ .use_pkg_config = .force });
