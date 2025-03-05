@@ -44,11 +44,16 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev pkg-config
 
+    - name: Setup FFmpeg (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        choco install ffmpeg-full
+
     - name: Build and Test
       run: |
         if [ "${{ matrix.os }}" = "windows-latest" ]; then
           zig build -Doptimize=ReleaseFast -Dtarget=${{ matrix.arch }}-windows test
-        elif [ "${{ matrix.os }}" = "ubuntu*" ]; then
+        elif [ "${{ matrix.os }}" == "ubuntu*" ]; then
           zig build -Doptimize=ReleaseFast -Dtarget=${{ matrix.arch }}-linux test
         elif [[ "${{ matrix.os }}" == macos* ]]; then
           zig build -Doptimize=ReleaseFast -Dtarget=${{ matrix.arch }}-macos test
