@@ -8,7 +8,7 @@ const term = @import("libglyphterm");
 // IMAGE PROCESSING FUNCTIONS
 // -----------------------
 
-fn downloadImage(allocator: std.mem.Allocator, url: []const u8) ![]u8 {
+pub fn downloadImage(allocator: std.mem.Allocator, url: []const u8) ![]u8 {
     var client = std.http.Client{ .allocator = allocator };
     defer client.deinit();
 
@@ -41,13 +41,7 @@ fn downloadImage(allocator: std.mem.Allocator, url: []const u8) ![]u8 {
     return body;
 }
 
-/// Okay so this is an insane bug. If a user passes in a .png file as input,
-/// it works fine most of the time. But SOMETIMES, for reasons unknown to me,
-/// the ascii art conversion gets absolutely NUKED. I'm not sure what's going
-/// but to fix it, I'm going to try to re-encode the image as a JPEG and then
-/// load it again. This is a very hacky solution, but it works. If anyone has
-/// any ideas on how to fix this, please let me know.
-fn loadImage(allocator: std.mem.Allocator, path: []const u8) !core.Image {
+pub fn loadImage(allocator: std.mem.Allocator, path: []const u8) !core.Image {
     const is_url = std.mem.startsWith(u8, path, "http://") or std.mem.startsWith(u8, path, "https://");
 
     var image_data: []u8 = undefined;
@@ -127,7 +121,7 @@ fn loadImage(allocator: std.mem.Allocator, path: []const u8) !core.Image {
     };
 }
 
-fn loadAndScaleImage(allocator: std.mem.Allocator, args: core.CoreParams) !core.Image {
+pub fn loadAndScaleImage(allocator: std.mem.Allocator, args: core.CoreParams) !core.Image {
     const original_img = loadImage(allocator, args.input) catch |err| {
         std.debug.print("Error loading image: {}\n", .{err});
         return err;
@@ -142,7 +136,7 @@ fn loadAndScaleImage(allocator: std.mem.Allocator, args: core.CoreParams) !core.
     }
 }
 
-fn scaleImage(allocator: std.mem.Allocator, img: core.Image, scale: f32) !core.Image {
+pub fn scaleImage(allocator: std.mem.Allocator, img: core.Image, scale: f32) !core.Image {
     var img_w = @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(img.width)) / scale)));
     var img_h = @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(img.height)) / scale)));
 
@@ -171,6 +165,8 @@ fn scaleImage(allocator: std.mem.Allocator, img: core.Image, scale: f32) !core.I
         return error.ImageScaleFailed;
     }
 
+    defer stb.stbi_image_free(scaled_img);
+
     @memcpy(scaled_data, scaled_img[0..buffer_size]);
 
     return core.Image{
@@ -181,10 +177,10 @@ fn scaleImage(allocator: std.mem.Allocator, img: core.Image, scale: f32) !core.I
     };
 }
 
-fn generateAsciiTxt(
+pub fn generateAsciiTxt(
     allocator: std.mem.Allocator,
     img: core.Image,
-    edge_result: core.EdgeData,
+    edge_result: ?core.EdgeData,
     args: core.CoreParams,
 ) ![]u8 {
     var out_w = (img.width / args.block_size) * args.block_size;
@@ -351,3 +347,5 @@ pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
         else => {},
     }
 }
+
+// TESTS

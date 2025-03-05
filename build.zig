@@ -123,20 +123,19 @@ fn setupExecutable(
 fn setupTest(
     self: *const BuildOptions,
     b: *std.Build,
-    name: []const u8,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     strip: bool,
     link_libc: bool,
 ) !*std.Build.Step.Compile {
     const unit_test = b.addTest(.{
-        .name = name,
-        .root_source_file = b.path("src/main.zig"),
+        .root_source_file = b.path("src/tests.zig"),
         .target = target,
         .optimize = optimize,
         .strip = strip,
         .link_libc = link_libc,
     });
+    unit_test.root_module.addImport("build_options", buildOptionsModule(self, b));
 
     const clap = b.dependency("clap", .{});
     unit_test.root_module.addImport("clap", clap.module("clap"));
@@ -195,11 +194,10 @@ fn runZig(
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    const test_step = b.step("test", "Run the test");
+    const test_step = b.step("test", "Run unit tests");
     const unit_tests = try setupTest(
         self,
         b,
-        "glyph-check",
         target,
         optimize,
         strip,

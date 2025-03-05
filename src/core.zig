@@ -1,6 +1,6 @@
 const std = @import("std");
 pub const bitmap = @import("bitmap.zig");
-const stb = @import("stb");
+pub const stb = @import("stb");
 
 pub const OutputType = enum {
     Stdout,
@@ -430,7 +430,7 @@ const BlockInfo = struct {
 };
 pub fn calculateBlockInfo(
     img: Image,
-    edge_result: EdgeData,
+    edge_result: ?EdgeData,
     x: usize,
     y: usize,
     out_w: usize,
@@ -463,10 +463,10 @@ pub fn calculateBlockInfo(
                 info.sum_color[1] += g;
                 info.sum_color[2] += b;
             }
-            if (args.detect_edges) {
+            if (edge_result != null) {
                 const edge_index = iy * img.width + ix;
-                info.sum_mag += edge_result.magnitude[edge_index];
-                info.sum_dir += edge_result.direction[edge_index];
+                info.sum_mag += edge_result.?.magnitude[edge_index];
+                info.sum_dir += edge_result.?.direction[edge_index];
             }
             info.pixel_count += 1;
         }
