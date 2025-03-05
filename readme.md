@@ -21,17 +21,7 @@ on macos you would do
 brew install ffmpeg pkgconf
 ```
 
-on windows:
-```bash
-choco install ffmpeg-full pkg-config
-```
-
-
-### i'm not doing pre-built binaries
-
-it is getting too annoying to handle cross plat binary releases using my apple silicon mac. just build from source.
-
-or wait till i release the web app!
+windows users, may god help you
 
 ### build from source
 

@@ -22,8 +22,6 @@ jobs:
           # x86
           - os: ubuntu-latest
             arch: x86_64
-          - os: windows-latest
-            arch: x86_64
 
     steps:
     - uses: actions/checkout@v4
@@ -43,25 +41,6 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev pkg-config
-
-    - name: Setup FFmpeg (Windows)
-      if: runner.os == 'Windows'
-      run: |
-        choco install -y ffmpeg-shared
-
-        dir "C:\ProgramData\chocolatey\lib\ffmpeg-shared\tools\ffmpeg-7.1-full_build-shared"
-
-        $ffmpegDir = "C:\ProgramData\chocolatey\lib\ffmpeg-shared\tools\ffmpeg-7.1-full_build-shared"
-
-        # Set environment variables for library paths
-        $ffmpegLib = Join-Path -Path $ffmpegDir -ChildPath "lib"
-        $ffmpegInclude = Join-Path -Path $ffmpegDir -ChildPath "include"
-        echo "LIB=$ffmpegLib;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
-        echo "INCLUDE=$ffmpegInclude;$env:INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-        # Verify installation
-        dir $ffmpegBin
-        dir $ffmpegLib
 
     - name: Test
       run: |
