@@ -49,7 +49,9 @@ jobs:
       run: |
         choco install -y ffmpeg-shared
 
-        $ffmpegDir = "C:\ProgramData\chocolatey\lib\ffmpeg-shared\tools\ffmpeg"
+        dir "C:\ProgramData\chocolatey\lib\ffmpeg-shared\tools"
+
+        $ffmpegDir = "C:\ProgramData\chocolatey\lib\ffmpeg-shared\tools\"
 
         # Set environment variables for library paths
         $ffmpegLib = Join-Path -Path $ffmpegDir -ChildPath "lib"
