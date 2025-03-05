@@ -49,6 +49,18 @@ jobs:
       run: |
         choco install -y ffmpeg-shared
 
+        $ffmpegDir = "C:\ProgramData\chocolatey\lib\ffmpeg-shared\tools\ffmpeg"
+
+        # Set environment variables for library paths
+        $ffmpegLib = Join-Path -Path $ffmpegDir -ChildPath "lib"
+        $ffmpegInclude = Join-Path -Path $ffmpegDir -ChildPath "include"
+        echo "LIB=$ffmpegLib;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
+        echo "INCLUDE=$ffmpegInclude;$env:INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+        # Verify installation
+        dir $ffmpegBin
+        dir $ffmpegLib
+
     - name: Test
       run: |
         zig build -Doptimize=ReleaseFast test
