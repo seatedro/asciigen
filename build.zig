@@ -126,14 +126,13 @@ fn setupTest(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     strip: bool,
-    link_libc: bool,
 ) !*std.Build.Step.Compile {
     const unit_test = b.addTest(.{
         .root_source_file = b.path("src/tests.zig"),
         .target = target,
         .optimize = optimize,
         .strip = strip,
-        .link_libc = link_libc,
+        .link_libc = true,
     });
     unit_test.root_module.addImport("build_options", buildOptionsModule(self, b));
 
@@ -209,7 +208,6 @@ fn runZig(
         target,
         optimize,
         strip,
-        false,
     );
     const run_unit_tests = b.addRunArtifact(unit_tests);
     test_step.dependOn(&run_unit_tests.step);
