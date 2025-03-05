@@ -8,7 +8,7 @@ const term = @import("libglyphterm");
 // IMAGE PROCESSING FUNCTIONS
 // -----------------------
 
-fn downloadImage(allocator: std.mem.Allocator, url: []const u8) ![]u8 {
+pub fn downloadImage(allocator: std.mem.Allocator, url: []const u8) ![]u8 {
     var client = std.http.Client{ .allocator = allocator };
     defer client.deinit();
 
@@ -41,13 +41,7 @@ fn downloadImage(allocator: std.mem.Allocator, url: []const u8) ![]u8 {
     return body;
 }
 
-/// Okay so this is an insane bug. If a user passes in a .png file as input,
-/// it works fine most of the time. But SOMETIMES, for reasons unknown to me,
-/// the ascii art conversion gets absolutely NUKED. I'm not sure what's going
-/// but to fix it, I'm going to try to re-encode the image as a JPEG and then
-/// load it again. This is a very hacky solution, but it works. If anyone has
-/// any ideas on how to fix this, please let me know.
-fn loadImage(allocator: std.mem.Allocator, path: []const u8) !core.Image {
+pub fn loadImage(allocator: std.mem.Allocator, path: []const u8) !core.Image {
     const is_url = std.mem.startsWith(u8, path, "http://") or std.mem.startsWith(u8, path, "https://");
 
     var image_data: []u8 = undefined;
@@ -127,7 +121,7 @@ fn loadImage(allocator: std.mem.Allocator, path: []const u8) !core.Image {
     };
 }
 
-fn loadAndScaleImage(allocator: std.mem.Allocator, args: core.CoreParams) !core.Image {
+pub fn loadAndScaleImage(allocator: std.mem.Allocator, args: core.CoreParams) !core.Image {
     const original_img = loadImage(allocator, args.input) catch |err| {
         std.debug.print("Error loading image: {}\n", .{err});
         return err;
@@ -142,7 +136,7 @@ fn loadAndScaleImage(allocator: std.mem.Allocator, args: core.CoreParams) !core.
     }
 }
 
-fn scaleImage(allocator: std.mem.Allocator, img: core.Image, scale: f32) !core.Image {
+pub fn scaleImage(allocator: std.mem.Allocator, img: core.Image, scale: f32) !core.Image {
     var img_w = @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(img.width)) / scale)));
     var img_h = @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(img.height)) / scale)));
 
@@ -171,6 +165,8 @@ fn scaleImage(allocator: std.mem.Allocator, img: core.Image, scale: f32) !core.I
         return error.ImageScaleFailed;
     }
 
+    defer stb.stbi_image_free(scaled_img);
+
     @memcpy(scaled_data, scaled_img[0..buffer_size]);
 
     return core.Image{
@@ -181,10 +177,10 @@ fn scaleImage(allocator: std.mem.Allocator, img: core.Image, scale: f32) !core.I
     };
 }
 
-fn generateAsciiTxt(
+pub fn generateAsciiTxt(
     allocator: std.mem.Allocator,
     img: core.Image,
-    edge_result: core.EdgeData,
+    edge_result: ?core.EdgeData,
     args: core.CoreParams,
 ) ![]u8 {
     var out_w = (img.width / args.block_size) * args.block_size;
@@ -239,7 +235,6 @@ fn saveOutputImage(ascii_img: []u8, img: core.Image, args: core.CoreParams) !voi
 
 pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
     const original_img = try loadAndScaleImage(allocator, args);
-    defer allocator.free(original_img.data); // We now consistently use allocator for all image data
 
     // Safety check for image dimensions
     if (original_img.width == 0 or original_img.height == 0) {
@@ -259,14 +254,8 @@ pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
         .height = original_img.height,
         .channels = original_img.channels,
     };
-    defer allocator.free(adjusted_data);
 
     const edge_result = try core.detectEdges(allocator, adjusted_img, args.detect_edges, args.sigma1, args.sigma2);
-    defer if (args.detect_edges) {
-        allocator.free(edge_result.grayscale);
-        allocator.free(edge_result.magnitude);
-        allocator.free(edge_result.direction);
-    };
 
     switch (args.output_type) {
         core.OutputType.Image => {
@@ -276,12 +265,10 @@ pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
                 edge_result,
                 args,
             );
-            defer allocator.free(ascii_img);
             try saveOutputImage(ascii_img, adjusted_img, args);
         },
         core.OutputType.Stdout => {
             var t = try term.init(allocator, args.ascii_chars);
-            defer t.deinit();
 
             var new_w: usize = 0;
             var new_h: usize = 0;
@@ -303,7 +290,6 @@ pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
             new_h = @max(new_h, 1);
 
             const img = try core.resizeImage(allocator, adjusted_img, new_w, new_h);
-            defer if (args.stretched) allocator.free(img.data);
 
             t.stats = .{
                 .original_w = adjusted_img.width,
@@ -345,9 +331,10 @@ pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
                 edge_result,
                 args,
             );
-            defer allocator.free(ascii_txt);
             try saveOutputTxt(ascii_txt, args);
         },
         else => {},
     }
 }
+
+// TESTS

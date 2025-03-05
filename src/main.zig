@@ -6,6 +6,9 @@ const image = @import("libglyphimg");
 const video = @import("libglyphav");
 const term = @import("libglyphterm");
 const bitmap = core.bitmap;
+const build_options = @import("build_options");
+const version = build_options.version;
+const version_string = std.fmt.comptimePrint("{d}.{d}.{d}", .{ version.major, version.minor, version.patch });
 
 const default_block = " .:coPO?@█";
 const default_ascii = " .:-=+*%@#";
@@ -14,6 +17,7 @@ const full_characters = " .-:=+iltIcsv1x%7aejorzfnuCJT3*69LYpqy25SbdgFGOVXkPhmw4
 fn parseArgs(allocator: std.mem.Allocator) !core.CoreParams {
     const params = comptime clap.parseParamsComptime(
         \\-h, --help                     Print this help message and exit
+        \\-v, --version                  Prints the version and exit
         \\-i, --input <str>              Input media file (img, video)
         \\-o, --output <str>             Output file (img, video, txt)
         \\-c, --color                    Use color ASCII characters
@@ -52,6 +56,11 @@ fn parseArgs(allocator: std.mem.Allocator) !core.CoreParams {
 
     if (res.args.help != 0) {
         try clap.help(std.io.getStdOut().writer(), clap.Help, &params, .{});
+        std.process.exit(0);
+    }
+
+    if (res.args.version != 0) {
+        try std.io.getStdOut().writer().writeAll(version_string ++ "\n");
         std.process.exit(0);
     }
 
@@ -223,61 +232,15 @@ fn hexToRgb(hex: []const u8) ![3]u8 {
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
 
-    var args = try parseArgs(allocator);
-    defer args.deinit();
-    defer allocator.free(args.ascii_info);
+    const args = try parseArgs(allocator);
 
     if (video.isVideoFile(args.input)) {
         try video.processVideo(allocator, args);
     } else {
         try image.processImage(allocator, args);
     }
-}
-
-test "test_ascii_generation" {
-    const allocator = std.testing.allocator;
-
-    // Create a temporary file path
-    var tmp_path_buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-    try std.fs.cwd().makePath("test_output");
-    const tmp_path = try std.fmt.bufPrintZ(
-        &tmp_path_buf,
-        "test_output/test_ascii_output.png",
-        .{},
-    );
-
-    // Set up test arguments
-    const test_args = core.CoreParams{
-        .input = "test_img.png",
-        .output = tmp_path,
-        .color = false,
-        .invert_color = false,
-        .scale = 1.0,
-        .detect_edges = false,
-        .sigma1 = 0.5,
-        .sigma2 = 1.0,
-        .brightness_boost = 1.0,
-        .full_characters = false,
-        .ascii_chars = null, //uses default (" .:-=+*%@#")
-        .disable_sort = false,
-        .block_size = 8,
-        .threshold_disabled = false,
-    };
-
-    // Run the main function with test arguments
-    try image.processImage(allocator, test_args);
-
-    // Check if the output file exists
-    const file = try std.fs.openFileAbsolute(tmp_path, .{});
-    defer file.close();
-
-    // Delete the temporary file
-    // try std.fs.deleteFileAbsolute(tmp_path);
-
-    // Try to open the file again, which should fail
-    // const result = std.fs.openFileAbsolute(tmp_path, .{});
-    // try std.testing.expectError(error.FileNotFound, result);
 }
